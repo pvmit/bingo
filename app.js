@@ -184,13 +184,13 @@
     const nick1 = el("input", {
       type: "text",
       maxlength: "16",
-      value: g?.players[1]?.nick || LABELS[1],
+      value: (g && g.players[1] && g.players[1].nick) || LABELS[1],
       placeholder: "Gracz 1",
     });
     const nick2 = el("input", {
       type: "text",
       maxlength: "16",
-      value: g?.players[2]?.nick || LABELS[2],
+      value: (g && g.players[2] && g.players[2].nick) || LABELS[2],
       placeholder: "Gracz 2",
     });
     const error = el("p", { class: "error hidden" });
@@ -221,7 +221,7 @@
       if (g.winnerId) {
         const w = g.players[g.winnerId];
         summary.append(
-          el("p", { class: "winner" }, [`Bingo! Wygrywa ${w?.nick || "gracz"}.`])
+          el("p", { class: "winner" }, [`Bingo! Wygrywa ${(w && w.nick) || "gracz"}.`])
         );
       }
 
@@ -395,6 +395,14 @@
 
   let repaint = null;
 
+  function showBootError(err) {
+    const msg = (err && err.message) ? err.message : String(err);
+    app.innerHTML =
+      '<section class="screen"><h1>BINGO</h1>' +
+      '<p class="error">Błąd ładowania: ' + msg.replace(/</g, "&lt;") + "</p>" +
+      '<p class="status-muted">Spróbuj Ctrl+F5 albo innej przeglądarki.</p></section>';
+  }
+
   function mount() {
     const r = route();
     if (r.view === "admin") repaint = renderAdmin();
@@ -405,13 +413,20 @@
     }
   }
 
-  window.addEventListener("hashchange", mount);
-  window.addEventListener("storage", (e) => {
+  window.addEventListener("hashchange", function () {
+    try { mount(); } catch (err) { showBootError(err); }
+  });
+  window.addEventListener("storage", function (e) {
     if (e.key === STORE_KEY && typeof repaint === "function") repaint();
   });
-  channel.onmessage = () => {
+  channel.onmessage = function () {
     if (typeof repaint === "function") repaint();
   };
 
-  mount();
+  try {
+    if (!app) throw new Error("Brak #app w HTML");
+    mount();
+  } catch (err) {
+    showBootError(err);
+  }
 })();
