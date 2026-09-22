@@ -533,16 +533,26 @@
       el("h1", null, ["BINGO"]),
       el("p", { class: "lead" }, ["3 urzadzenia · wspolna plansza 5×5"]),
     ];
-    if (roomCode && (playerRole === 1 || playerRole === 2 || playerRole === 9)) {
+    if (roomCode && (playerRole === 1 || playerRole === 2)) {
       kids.push(
         el("button", {
           class: "primary",
           type: "button",
           onClick: function () {
-            if (playerRole === 9) go("#/admin/" + roomCode);
-            else go("#/p" + playerRole + "/" + roomCode);
+            go("#/p" + playerRole + "/" + roomCode);
           },
         }, ["Wroc do gry (" + roomCode + ")"])
+      );
+    }
+    if (roomCode && playerRole === 9) {
+      kids.push(
+        el("button", {
+          class: "primary",
+          type: "button",
+          onClick: function () {
+            go("#/admin/" + roomCode);
+          },
+        }, ["Wroc do panelu admina (" + roomCode + ")"])
       );
     }
     kids.push(
@@ -580,8 +590,22 @@
           },
         }, ["GRACZ 2"]),
       ]),
+      el("button", {
+        class: "ghost admin-entry",
+        type: "button",
+        onClick: function () {
+          const c = (codeInput.value.trim() || roomCode || "").toUpperCase();
+          setRole(9);
+          if (c.length === 4) {
+            setRoom(c);
+            go("#/admin/" + c);
+          } else {
+            go("#/admin");
+          }
+        },
+      }, [roomCode ? "Panel admina (" + roomCode + ")" : "Panel admina"]),
       el("p", { class: "hint" }, [
-        "Wpisz kod od prowadzacego i wybierz gracza. Admin: #/admin",
+        "Gracze: wpisz kod i wybierz role. Admin: przycisk powyzej albo #/admin.",
       ])
     );
     app.replaceChildren(el("section", { class: "screen home" }, kids));

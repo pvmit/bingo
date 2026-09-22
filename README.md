@@ -14,9 +14,9 @@ Bingo 5×5 na **3 urządzenia** (admin + 2 graczy). Sync przez **PeerJS** (WebRT
 
 | Link | Rola |
 |------|------|
-| `#/` | Menu graczy + kod |
-| `#/admin` | Start / podgląd (tylko linkiem) |
-| `#/p1/KOD` | Gracz 1 |
+| `#/` | Menu graczy + kod + **Panel admina** |
+| `#/admin` | Start / podgląd |
+| `#/admin/KOD` | Powrót do trwającej gry jako admin |
 | `#/p2/KOD` | Gracz 2 |
 
 Plansza zawsze **5×5**. Cele: [`goals.js`](goals.js).
