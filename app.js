@@ -4,17 +4,32 @@
   const COLORS = { 1: "#e23d4a", 2: "#5b8cff" };
   const LABELS = { 1: "Gracz 1", 2: "Gracz 2" };
   const ROOM_KEY = "bingo.room";
+  const ROLE_KEY = "bingo.role";
+  const GAME_KEY = "bingo.game";
 
   const app = document.getElementById("app");
   let game = null;
-  let roomCode = sessionStorage.getItem(ROOM_KEY) || "";
+  let roomCode = localStorage.getItem(ROOM_KEY) || "";
+  let playerRole = (function () {
+    const raw = localStorage.getItem(ROLE_KEY);
+    if (raw === "admin") return 9;
+    return Number(raw) || 0;
+  })();
   let peer = null;
   let hostConn = null;
   const clients = [];
   let repaint = null;
   let syncStatus = "offline";
   let syncError = "";
+  let reconnectTimer = null;
+  let joining = false;
 
+  try {
+    const cached = localStorage.getItem(GAME_KEY);
+    if (cached) game = JSON.parse(cached);
+  } catch (e) {
+    game = null;
+  }
   function mulberry32(seed) {
     let a = seed >>> 0;
     return function next() {
@@ -144,10 +159,54 @@
 
   function setRoom(code) {
     roomCode = String(code || "").toUpperCase();
-    if (roomCode) sessionStorage.setItem(ROOM_KEY, roomCode);
-    else sessionStorage.removeItem(ROOM_KEY);
+    if (roomCode) localStorage.setItem(ROOM_KEY, roomCode);
+    else localStorage.removeItem(ROOM_KEY);
   }
 
+  function setRole(role) {
+    playerRole = Number(role) || 0;
+    if (playerRole === 1 || playerRole === 2) localStorage.setItem(ROLE_KEY, String(playerRole));
+    else if (playerRole === 9) localStorage.setItem(ROLE_KEY, "admin");
+    else localStorage.removeItem(ROLE_KEY);
+  }
+
+  function saveGameCache() {
+    try {
+      if (game) localStorage.setItem(GAME_KEY, JSON.stringify(game));
+      else localStorage.removeItem(GAME_KEY);
+    } catch (e) { /* ignore quota */ }
+  }
+
+  function clearSession() {
+    setRoom("");
+    setRole(0);
+    game = null;
+    saveGameCache();
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
+      resumeIfNeeded();
+    }, 1500);
+  }
+
+  function ensurePlayerConnection() {
+    const r = route();
+    if (r.view !== "player" || !roomCode || joining) return;
+    if (hostConn && hostConn.open && syncStatus === "polaczono") return;
+    joining = true;
+    joinHost(roomCode)
+      .catch(function (err) {
+        syncError = err.message || String(err);
+        scheduleReconnect();
+      })
+      .finally(function () {
+        joining = false;
+        if (typeof repaint === "function") repaint();
+      });
+  }
   function openClients() {
     return clients.filter(function (c) {
       return c.open;
@@ -169,7 +228,34 @@
     else p.done[idx] = true;
     if (countLines(p.done) >= 1) game.winnerId = playerId;
     game.updatedAt = Date.now();
+    saveGameCache();
     return true;
+  }
+
+  function ensureAdminHost() {
+    const r = route();
+    if (r.view !== "admin" || !roomCode || !game || joining) return;
+    if (peer && !peer.destroyed && String(syncStatus).indexOf("host") === 0) return;
+    joining = true;
+    startHost(roomCode)
+      .then(function () {
+        broadcastState();
+      })
+      .catch(function (err) {
+        syncError = err.message || String(err);
+        scheduleReconnect();
+      })
+      .finally(function () {
+        joining = false;
+        if (typeof repaint === "function") repaint();
+      });
+  }
+
+  function resumeIfNeeded() {
+    if (document.visibilityState === "hidden") return;
+    const r = route();
+    if (r.view === "player") ensurePlayerConnection();
+    else if (r.view === "admin") ensureAdminHost();
   }
 
   function destroyPeer() {
@@ -268,16 +354,19 @@
         hostConn.on("data", function (msg) {
           if (!msg || msg.type !== "state") return;
           game = msg.game;
+          saveGameCache();
           if (typeof repaint === "function") repaint();
         });
         hostConn.on("close", function () {
           syncStatus = "rozlaczono";
           if (typeof repaint === "function") repaint();
+          scheduleReconnect();
         });
         hostConn.on("error", function (err) {
           syncError = err.message || String(err);
           syncStatus = "blad";
           if (typeof repaint === "function") repaint();
+          scheduleReconnect();
         });
       });
       peer.on("error", function (err) {
@@ -307,17 +396,35 @@
     const parts = raw.split("/").filter(Boolean);
     if (parts[0] === "admin") {
       if (parts[1]) setRoom(parts[1]);
+      setRole(9);
       return { view: "admin" };
     }
     if (parts[0] === "p1") {
       if (parts[1]) setRoom(parts[1]);
+      setRole(1);
       return { view: "player", id: 1 };
     }
     if (parts[0] === "p2") {
       if (parts[1]) setRoom(parts[1]);
+      setRole(2);
       return { view: "player", id: 2 };
     }
     return { view: "home" };
+  }
+
+  function restoreHashFromStorage() {
+    const raw = (location.hash || "#/").replace(/^#/, "") || "/";
+    const parts = raw.split("/").filter(Boolean);
+    if (parts.length) return false;
+    if ((playerRole === 1 || playerRole === 2) && roomCode) {
+      location.replace("#/p" + playerRole + "/" + roomCode);
+      return true;
+    }
+    if (playerRole === 9 && roomCode) {
+      location.replace("#/admin/" + roomCode);
+      return true;
+    }
+    return false;
   }
 
   function el(tag, attrs, kids) {
@@ -366,47 +473,62 @@
       value: roomCode,
       class: "code-input",
     });
-    app.replaceChildren(
-      el("section", { class: "screen home" }, [
-        el("h1", null, ["BINGO"]),
-        el("p", { class: "lead" }, ["3 urzadzenia · wspolna plansza 5×5"]),
-        el("label", { class: "field" }, [
-          el("span", null, ["Kod pokoju (od admina)"]),
-          codeInput,
-        ]),
-        el("div", { class: "role-grid" }, [
-          el("button", {
-            class: "role p1",
-            type: "button",
-            onClick: function () {
-              const c = codeInput.value.trim().toUpperCase();
-              if (c.length !== 4) {
-                alert("Wpisz 4-znakowy kod z panelu admina.");
-                return;
-              }
-              setRoom(c);
-              go("#/p1/" + c);
-            },
-          }, ["GRACZ 1"]),
-          el("button", {
-            class: "role p2",
-            type: "button",
-            onClick: function () {
-              const c = codeInput.value.trim().toUpperCase();
-              if (c.length !== 4) {
-                alert("Wpisz 4-znakowy kod z panelu admina.");
-                return;
-              }
-              setRoom(c);
-              go("#/p2/" + c);
-            },
-          }, ["GRACZ 2"]),
-        ]),
-        el("p", { class: "hint" }, [
-          "Wpisz kod od prowadzacego i wybierz gracza. Admin: #/admin",
-        ]),
+    const kids = [
+      el("h1", null, ["BINGO"]),
+      el("p", { class: "lead" }, ["3 urzadzenia · wspolna plansza 5×5"]),
+    ];
+    if (roomCode && (playerRole === 1 || playerRole === 2 || playerRole === 9)) {
+      kids.push(
+        el("button", {
+          class: "primary",
+          type: "button",
+          onClick: function () {
+            if (playerRole === 9) go("#/admin/" + roomCode);
+            else go("#/p" + playerRole + "/" + roomCode);
+          },
+        }, ["Wroc do gry (" + roomCode + ")"])
+      );
+    }
+    kids.push(
+      el("label", { class: "field" }, [
+        el("span", null, ["Kod pokoju (od admina)"]),
+        codeInput,
+      ]),
+      el("div", { class: "role-grid" }, [
+        el("button", {
+          class: "role p1",
+          type: "button",
+          onClick: function () {
+            const c = codeInput.value.trim().toUpperCase();
+            if (c.length !== 4) {
+              alert("Wpisz 4-znakowy kod z panelu admina.");
+              return;
+            }
+            setRoom(c);
+            setRole(1);
+            go("#/p1/" + c);
+          },
+        }, ["GRACZ 1"]),
+        el("button", {
+          class: "role p2",
+          type: "button",
+          onClick: function () {
+            const c = codeInput.value.trim().toUpperCase();
+            if (c.length !== 4) {
+              alert("Wpisz 4-znakowy kod z panelu admina.");
+              return;
+            }
+            setRoom(c);
+            setRole(2);
+            go("#/p2/" + c);
+          },
+        }, ["GRACZ 2"]),
+      ]),
+      el("p", { class: "hint" }, [
+        "Wpisz kod od prowadzacego i wybierz gracza. Admin: #/admin",
       ])
     );
+    app.replaceChildren(el("section", { class: "screen home" }, kids));
   }
 
   function renderAdmin() {
@@ -500,6 +622,8 @@
         return;
       }
       setRoom(code);
+      setRole(9);
+      saveGameCache();
       history.replaceState(null, "", "#/admin/" + code);
       paint();
       startHost(code)
@@ -522,7 +646,7 @@
       game = null;
       broadcastState();
       destroyPeer();
-      setRoom("");
+      clearSession();
       history.replaceState(null, "", "#/admin");
       paint();
     }
@@ -557,14 +681,7 @@
     paint();
 
     if (roomCode && syncStatus === "offline") {
-      startHost(roomCode)
-        .then(function () {
-          broadcastState();
-          paint();
-        })
-        .catch(function () {
-          paint();
-        });
+      ensureAdminHost();
     }
 
     return paint;
@@ -661,13 +778,8 @@
     );
     paint();
 
-    if (roomCode && syncStatus === "offline") {
-      joinHost(roomCode)
-        .then(paint)
-        .catch(function (err) {
-          syncError = err.message || String(err);
-          paint();
-        });
+    if (roomCode && (syncStatus === "offline" || syncStatus === "rozlaczono" || syncStatus === "blad")) {
+      ensurePlayerConnection();
     }
 
     return paint;
@@ -699,9 +811,19 @@
     }
   });
 
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") resumeIfNeeded();
+  });
+  window.addEventListener("pageshow", function () {
+    resumeIfNeeded();
+  });
+  window.addEventListener("online", function () {
+    resumeIfNeeded();
+  });
+
   try {
     if (!app) throw new Error("Brak #app");
-    mount();
+    if (!restoreHashFromStorage()) mount();
   } catch (err) {
     showBootError(err);
   }
