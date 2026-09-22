@@ -143,10 +143,11 @@
     return "bingo-" + String(code).toUpperCase();
   }
 
-  function newGame(nicks) {
-    const seed = "bingo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+  function newGame(nicks, code) {
+    const seed = "bingo-board-" + String(code || "").toUpperCase();
     return {
       seed: seed,
+      code: String(code || "").toUpperCase(),
       board: pickBoard(seed),
       players: {
         1: { nick: nicks[1] || LABELS[1], done: {} },
@@ -192,25 +193,22 @@
     }, 1500);
   }
 
-  function ensurePlayerConnection() {
-    const r = route();
-    if (r.view !== "player" || !roomCode || joining) return;
-    if (hostConn && hostConn.open && syncStatus === "polaczono") return;
-    joining = true;
-    joinHost(roomCode)
-      .catch(function (err) {
-        syncError = err.message || String(err);
-        scheduleReconnect();
-      })
-      .finally(function () {
-        joining = false;
-        if (typeof repaint === "function") repaint();
-      });
-  }
   function openClients() {
     return clients.filter(function (c) {
       return c.open;
     }).length;
+  }
+
+  function isHosting() {
+    return !!(peer && !peer.destroyed && !hostConn && String(syncStatus).indexOf("host") === 0);
+  }
+
+  function isClientConnected() {
+    return !!(hostConn && hostConn.open && syncStatus === "polaczono");
+  }
+
+  function roomConnected() {
+    return isHosting() || isClientConnected();
   }
 
   function broadcastState() {
@@ -218,6 +216,21 @@
     clients.forEach(function (c) {
       if (c.open) c.send(payload);
     });
+  }
+
+  function acceptIncomingGame(incoming) {
+    if (incoming == null) {
+      if (game == null) return false;
+      game = null;
+      saveGameCache();
+      return true;
+    }
+    if (!game || (incoming.updatedAt || 0) >= (game.updatedAt || 0)) {
+      game = incoming;
+      saveGameCache();
+      return true;
+    }
+    return false;
   }
 
   function applyToggle(playerId, idx) {
@@ -232,30 +245,9 @@
     return true;
   }
 
-  function ensureAdminHost() {
-    const r = route();
-    if (r.view !== "admin" || !roomCode || !game || joining) return;
-    if (peer && !peer.destroyed && String(syncStatus).indexOf("host") === 0) return;
-    joining = true;
-    startHost(roomCode)
-      .then(function () {
-        broadcastState();
-      })
-      .catch(function (err) {
-        syncError = err.message || String(err);
-        scheduleReconnect();
-      })
-      .finally(function () {
-        joining = false;
-        if (typeof repaint === "function") repaint();
-      });
-  }
-
-  function resumeIfNeeded() {
-    if (document.visibilityState === "hidden") return;
-    const r = route();
-    if (r.view === "player") ensurePlayerConnection();
-    else if (r.view === "admin") ensureAdminHost();
+  function updateHostStatus() {
+    syncStatus = "host (" + openClients() + " pol.)";
+    if (typeof repaint === "function") repaint();
   }
 
   function destroyPeer() {
@@ -271,7 +263,101 @@
     syncStatus = "offline";
   }
 
-  function startHost(code) {
+  function wireHostConnection(conn) {
+    clients.push(conn);
+    conn.on("open", function () {
+      conn.send({ type: "state", game: game });
+      updateHostStatus();
+    });
+    conn.on("data", function (msg) {
+      if (!msg) return;
+      if (msg.type === "toggle") {
+        if (applyToggle(msg.playerId, msg.idx)) {
+          broadcastState();
+          if (typeof repaint === "function") repaint();
+        }
+        return;
+      }
+      if (msg.type === "state") {
+        if (acceptIncomingGame(msg.game)) {
+          broadcastState();
+          if (typeof repaint === "function") repaint();
+        }
+      }
+    });
+    conn.on("close", function () {
+      const i = clients.indexOf(conn);
+      if (i >= 0) clients.splice(i, 1);
+      updateHostStatus();
+    });
+  }
+
+  function tryJoinAsClient(code) {
+    return new Promise(function (resolve, reject) {
+      destroyPeer();
+      setRoom(code);
+      if (typeof Peer === "undefined") {
+        reject(new Error("PeerJS nie zaladowany — sprawdz internet / CDN."));
+        return;
+      }
+      syncStatus = "laczenie";
+      syncError = "";
+      let settled = false;
+      const failTimer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        try { if (peer) peer.destroy(); } catch (e) { /* ignore */ }
+        peer = null;
+        hostConn = null;
+        syncStatus = "offline";
+        reject(new Error("no-host"));
+      }, 4500);
+
+      peer = new Peer({ debug: 0 });
+      peer.on("open", function () {
+        hostConn = peer.connect(peerIdFor(code), { reliable: true });
+        hostConn.on("open", function () {
+          if (settled) return;
+          settled = true;
+          clearTimeout(failTimer);
+          syncStatus = "polaczono";
+          syncError = "";
+          if (game) hostConn.send({ type: "state", game: game });
+          if (typeof repaint === "function") repaint();
+          resolve();
+        });
+        hostConn.on("data", function (msg) {
+          if (!msg || msg.type !== "state") return;
+          if (acceptIncomingGame(msg.game) && typeof repaint === "function") repaint();
+        });
+        hostConn.on("close", function () {
+          syncStatus = "rozlaczono";
+          if (typeof repaint === "function") repaint();
+          scheduleReconnect();
+        });
+        hostConn.on("error", function (err) {
+          if (!settled) {
+            settled = true;
+            clearTimeout(failTimer);
+            reject(err);
+            return;
+          }
+          syncError = err.message || String(err);
+          syncStatus = "blad";
+          if (typeof repaint === "function") repaint();
+          scheduleReconnect();
+        });
+      });
+      peer.on("error", function (err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(failTimer);
+        reject(err);
+      });
+    });
+  }
+
+  function tryBecomeHost(code) {
     return new Promise(function (resolve, reject) {
       destroyPeer();
       setRoom(code);
@@ -289,6 +375,7 @@
         syncStatus = "blad";
         reject(new Error(syncError));
       }, 10000);
+
       peer = new Peer(peerIdFor(code), { debug: 0 });
       peer.on("open", function () {
         if (settled) return;
@@ -299,32 +386,16 @@
         if (typeof repaint === "function") repaint();
         resolve();
       });
-      peer.on("connection", function (conn) {
-        clients.push(conn);
-        conn.on("open", function () {
-          conn.send({ type: "state", game: game });
-          syncStatus = "host (" + openClients() + " pol.)";
-          if (typeof repaint === "function") repaint();
-        });
-        conn.on("data", function (msg) {
-          if (!msg || msg.type !== "toggle") return;
-          if (applyToggle(msg.playerId, msg.idx)) {
-            broadcastState();
-            if (typeof repaint === "function") repaint();
-          }
-        });
-        conn.on("close", function () {
-          const i = clients.indexOf(conn);
-          if (i >= 0) clients.splice(i, 1);
-          syncStatus = "host (" + openClients() + " pol.)";
-          if (typeof repaint === "function") repaint();
-        });
-      });
+      peer.on("connection", wireHostConnection);
       peer.on("error", function (err) {
         if (settled) return;
         settled = true;
         clearTimeout(failTimer);
-        syncError = err.type || err.message || String(err);
+        if (err && err.type === "unavailable-id") {
+          tryJoinAsClient(code).then(resolve).catch(reject);
+          return;
+        }
+        syncError = (err && (err.type || err.message)) || String(err);
         syncStatus = "blad";
         if (typeof repaint === "function") repaint();
         reject(err);
@@ -332,50 +403,33 @@
     });
   }
 
-  function joinHost(code) {
-    return new Promise(function (resolve, reject) {
-      destroyPeer();
-      setRoom(code);
-      if (typeof Peer === "undefined") {
-        reject(new Error("PeerJS nie zaladowany — sprawdz internet / CDN."));
-        return;
-      }
-      syncStatus = "laczenie";
-      syncError = "";
-      peer = new Peer({ debug: 0 });
-      peer.on("open", function () {
-        hostConn = peer.connect(peerIdFor(code), { reliable: true });
-        hostConn.on("open", function () {
-          syncStatus = "polaczono";
-          syncError = "";
-          if (typeof repaint === "function") repaint();
-          resolve();
-        });
-        hostConn.on("data", function (msg) {
-          if (!msg || msg.type !== "state") return;
-          game = msg.game;
-          saveGameCache();
-          if (typeof repaint === "function") repaint();
-        });
-        hostConn.on("close", function () {
-          syncStatus = "rozlaczono";
-          if (typeof repaint === "function") repaint();
-          scheduleReconnect();
-        });
-        hostConn.on("error", function (err) {
-          syncError = err.message || String(err);
-          syncStatus = "blad";
-          if (typeof repaint === "function") repaint();
-          scheduleReconnect();
-        });
-      });
-      peer.on("error", function (err) {
-        syncError = err.type || err.message || String(err);
-        syncStatus = "blad";
-        if (typeof repaint === "function") repaint();
-        reject(err);
-      });
+  /** Anyone online can host — admin can close after players joined. */
+  function enterRoom(code) {
+    return tryJoinAsClient(code).catch(function () {
+      return tryBecomeHost(code);
     });
+  }
+
+  function ensureRoomConnection() {
+    const r = route();
+    if (r.view === "home" || !roomCode || joining) return;
+    if (roomConnected()) return;
+    joining = true;
+    enterRoom(roomCode)
+      .catch(function (err) {
+        syncError = err.message || String(err);
+        scheduleReconnect();
+      })
+      .finally(function () {
+        joining = false;
+        if (typeof repaint === "function") repaint();
+      });
+  }
+
+  function resumeIfNeeded() {
+    if (document.visibilityState === "hidden") return;
+    const r = route();
+    if (r.view === "player" || r.view === "admin") ensureRoomConnection();
   }
 
   function sendToggle(playerId, idx) {
@@ -383,8 +437,7 @@
       hostConn.send({ type: "toggle", playerId: playerId, idx: idx });
       return true;
     }
-    // Host (admin) clicking as spectator shouldn't mark; players on host device:
-    if (peer && !hostConn && applyToggle(playerId, idx)) {
+    if (isHosting() && applyToggle(playerId, idx)) {
       broadcastState();
       return true;
     }
@@ -453,11 +506,14 @@
   }
 
   function syncBadge() {
-    if (syncError) return el("p", { class: "error" }, ["Sync: " + syncError]);
+    if (syncError && syncError !== "no-host") {
+      return el("p", { class: "error" }, ["Sync: " + syncError]);
+    }
     let label = "Brak pokoju";
     if (roomCode) {
-      if (syncStatus.indexOf("host") === 0) label = "Host " + roomCode + " · " + syncStatus;
-      else if (syncStatus === "polaczono") label = "Polaczono z " + roomCode;
+      if (syncStatus.indexOf("host") === 0) {
+        label = "Host pokoju " + roomCode + " · " + syncStatus + " (admin nie musi byc online)";
+      } else if (syncStatus === "polaczono") label = "Polaczono z " + roomCode;
       else if (syncStatus === "laczenie") label = "Laczenie z " + roomCode + "…";
       else label = "Pokoj " + roomCode + " · " + syncStatus;
     }
@@ -612,10 +668,13 @@
       busy = true;
       const code = randomCode();
       try {
-        game = newGame({
-          1: nick1.value.trim() || LABELS[1],
-          2: nick2.value.trim() || LABELS[2],
-        });
+        game = newGame(
+          {
+            1: nick1.value.trim() || LABELS[1],
+            2: nick2.value.trim() || LABELS[2],
+          },
+          code
+        );
       } catch (err) {
         busy = false;
         showErr(err.message || String(err));
@@ -626,7 +685,7 @@
       saveGameCache();
       history.replaceState(null, "", "#/admin/" + code);
       paint();
-      startHost(code)
+      tryBecomeHost(code)
         .then(function () {
           broadcastState();
           paint();
@@ -662,7 +721,9 @@
           el("strong", null, ["ADMIN"]),
         ]),
         el("h1", { class: "admin-title" }, ["BINGO"]),
-        el("p", { class: "lead" }, ["Laptop = host. Telefony lacza sie kodem."]),
+        el("p", { class: "lead" }, [
+          "Startujesz gre i rozdajesz kod. Potem mozesz zamknac laptopa — telefony same utrzymuja sync.",
+        ]),
         status,
         codeBox,
         el("div", { class: "admin-nicks" }, [
@@ -680,8 +741,8 @@
     );
     paint();
 
-    if (roomCode && syncStatus === "offline") {
-      ensureAdminHost();
+    if (roomCode && !roomConnected()) {
+      ensureRoomConnection();
     }
 
     return paint;
@@ -693,7 +754,7 @@
     const status = el("div");
     const winner = el("p", { class: "winner hidden" });
     const empty = el("p", { class: "status-muted" }, [
-      "Brak gry albo brak polaczenia. Sprawdz kod i czy admin ma otwarty panel.",
+      "Brak gry albo laczenie… Wejdz po starcie u admina (wystarczy raz pobrac plansze).",
     ]);
     const boardEl = el("div", { class: "board" });
     boardEl.style.gridTemplateColumns = "repeat(" + SIZE + ", minmax(0, 1fr))";
@@ -778,8 +839,8 @@
     );
     paint();
 
-    if (roomCode && (syncStatus === "offline" || syncStatus === "rozlaczono" || syncStatus === "blad")) {
-      ensurePlayerConnection();
+    if (roomCode && !roomConnected()) {
+      ensureRoomConnection();
     }
 
     return paint;
