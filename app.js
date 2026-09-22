@@ -401,14 +401,9 @@
               go("#/p2/" + c);
             },
           }, ["GRACZ 2"]),
-          el("button", {
-            class: "role admin",
-            type: "button",
-            onClick: function () { go("#/admin"); },
-          }, ["ADMINISTRATOR"]),
         ]),
         el("p", { class: "hint" }, [
-          "Admin tworzy gre i pokazuje kod. Telefony wpisuja kod. Laptop admina musi zostac otwarty (host).",
+          "Wpisz kod od prowadzacego i wybierz gracza. Admin: #/admin",
         ]),
       ])
     );

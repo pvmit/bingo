@@ -4,18 +4,18 @@ Bingo 5×5 na **3 urządzenia** (admin + 2 graczy). Sync przez **PeerJS** (WebRT
 
 ## Jak grac
 
-1. **Laptop (admin):** otwórz [pvmit.github.io/bingo](https://pvmit.github.io/bingo/) → **ADMINISTRATOR** → **Nowa gra**.
-2. Pojawi się **kod pokoju** (np. `K7MP`). Laptop musi zostać otwarty (to host).
-3. **Telefon 1:** ten sam URL → wpisz kod → **GRACZ 1** (albo od razu `#/p1/K7MP`).
-4. **Telefon 2:** `#/p2/K7MP`.
+1. **Laptop:** otwórz [pvmit.github.io/bingo/#/admin](https://pvmit.github.io/bingo/#/admin) → **Nowa gra**.
+2. Pojawi się **kod pokoju**. Laptop musi zostać otwarty (to host).
+3. **Telefon 1:** [pvmit.github.io/bingo](https://pvmit.github.io/bingo/) → wpisz kod → **Gracz 1**.
+4. **Telefon 2:** kod → **Gracz 2**.
 5. Kliknięcia synchronizują się na żywo.
 
 ## Role
 
 | Link | Rola |
 |------|------|
-| `#/` | Menu + pole kodu |
-| `#/admin` | Host: nowa gra, reset, podglad |
+| `#/` | Menu graczy + kod |
+| `#/admin` | Host (tylko linkiem) |
 | `#/p1/KOD` | Gracz 1 |
 | `#/p2/KOD` | Gracz 2 |
 
