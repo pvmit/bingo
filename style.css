@@ -49,6 +49,53 @@ h1 {
 .status-ok { color: var(--ok); font-weight: 600; }
 .status-muted { color: var(--muted); }
 
+.hint {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.hidden { display: none !important; }
+
+.cell.done-p1 {
+  box-shadow: inset 3px 0 0 var(--p1);
+  border-color: color-mix(in srgb, var(--p1) 45%, var(--line));
+}
+
+.cell.done-p2 {
+  box-shadow: inset -3px 0 0 var(--p2);
+  border-color: color-mix(in srgb, var(--p2) 45%, var(--line));
+}
+
+.cell.done.done-p1 {
+  background: color-mix(in srgb, var(--p1) 22%, var(--cell));
+}
+
+.cell.done.done-p2 {
+  background: color-mix(in srgb, var(--p2) 22%, var(--cell));
+}
+
+.cell.line-win {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.cell-marks {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  gap: 2px;
+}
+
+.cell-marks i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: block;
+}
+
 .role-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
