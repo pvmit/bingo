@@ -1,42 +1,53 @@
-# Bingo — jedna gra, sync, pula w jednym pliku
+# Bingo (lockout-lite)
 
-Proste bingo w stylu [lockout.live](https://lockout.live/) na **jedną aktywną grę**. Wspólna plansza, sync przez Firebase Realtime Database, cele losowane z pliku `goals.js`.
-
-Live (po włączeniu Pages): `https://pvmit.github.io/bingo/`
+Proste bingo jak [lockout.live](https://lockout.live/), ale na **jedną grę naraz**: wspólna plansza, sync między graczami, cele z jednego pliku.
 
 ## Jak grać
 
-1. Jeden host: nick → wybierz rozmiar → **Nowa gra** → podaj kod reszcie.
-2. Reszta: nick + kod → **Dołącz**.
-3. Klikaj cele, które zaliczyłeś. Pierwsza pełna linia (wiersz / kolumna / przekątna) wygrywa.
-4. Wielu graczy może mieć ten sam cel. Nowa gra nadpisuje poprzednią.
+1. Uzupełnij Firebase (poniżej) i otwórz stronę.
+2. Host: wpisz nick → wybierz rozmiar → **Nowa gra** → podaj kod innym.
+3. Reszta: nick + kod → **Dołącz**.
+4. Klikaj cele, które wykonałeś. Pierwsza ukończona linia (wiersz / kolumna / przekątna) wygrywa.
+
+Wielu graczy może mieć ten sam cel (bez trybu Lockout).
 
 ## Edycja puli celów
 
-Jedyny plik treści: **`goals.js`**.
+Jedyny plik z treścią: **[`goals.js`](goals.js)**.
 
 ```js
 window.GOALS = [
   "Zrób 20 przysiadów",
   "Wymień 5 punktów Prawa Harcerskiego",
+  // ...
 ];
 ```
 
-Potrzebujesz co najmniej `rozmiar × rozmiar` unikalnych pozycji (dla 5×5 → min. 25).
+Na planszę `N×N` potrzeba co najmniej `N²` unikalnych pozycji w puli (dla 5×5 → min. 25).
 
-## Setup Firebase (jednorazowo)
+## Firebase (wymagane do sync)
 
-1. Wejdź na [Firebase Console](https://console.firebase.google.com/) → **Add project**.
-2. **Build → Realtime Database → Create Database** (np. `europe-west1`). Na start: tryb testowy albo wklej reguły z `database.rules.json`.
-3. **Project settings → Your apps → Web** → skopiuj config.
-4. Wklej wartości do `firebase-config.js` (zastąp wszystkie `REPLACE_ME`).
-5. W RTDB → **Rules** wklej zawartość `database.rules.json` i Publish.
+1. [Firebase Console](https://console.firebase.google.com/) → nowy projekt.
+2. **Build → Realtime Database** → Create (np. `europe-west1`).
+3. **Project settings → Your apps → Web** → skopiuj config do [`firebase-config.js`](firebase-config.js).
+4. Reguły RTDB (na start, gra drużynowa):
 
-Bez uzupełnionego configu lobby pokaże komunikat i zablokuje przyciski.
+```json
+{
+  "rules": {
+    "game": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}
+```
+
+Bez uzupełnionego configu strona pokaże ostrzeżenie — sync nie ruszy.
 
 ## Lokalnie
 
-Otwórz `index.html` przez prosty serwer HTTP (Firebase i przeglądarka lubią `http://`, nie zawsze `file://`):
+Otwórz `index.html` przez lokalny serwer HTTP (Firebase / pliki ES nie wymagają, ale `file://` bywa kapryśny):
 
 ```bash
 npx --yes serve .
@@ -44,9 +55,9 @@ npx --yes serve .
 
 ## GitHub Pages
 
-1. Repo: `pvmit/bingo` (lub własne).
-2. **Settings → Pages → Deploy from a branch → `main` / `/ (root)`**.
-3. Strona: `https://<user>.github.io/bingo/`.
+1. Repo na GitHubie (np. `pvmit/bingo`).
+2. **Settings → Pages → Deploy from a branch** → `main` / `/ (root)`.
+3. Adres: `https://<user>.github.io/bingo/`
 
 ## Pliki
 
@@ -54,5 +65,6 @@ npx --yes serve .
 |------|------|
 | `goals.js` | Pula celów |
 | `firebase-config.js` | Publiczny config Firebase |
-| `database.rules.json` | Reguły RTDB (`/game` read/write) |
-| `index.html` / `style.css` / `app.js` | UI i logika |
+| `index.html` | UI |
+| `style.css` | Styl |
+| `app.js` | Losowanie, sync, linie, zwycięzca |

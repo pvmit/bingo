@@ -3,67 +3,62 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bingo — jedna gra</title>
+  <title>Bingo</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <section id="lobby">
-    <div class="lobby-card">
+  <div id="setup" class="screen">
+    <header class="brand">
       <h1>Bingo</h1>
-      <p class="sub">Jedna wspólna plansza, sync na żywo. Cele z pliku <code>goals.js</code>.</p>
-
-      <div class="field">
-        <label for="nick">Nick</label>
-        <input id="nick" maxlength="24" placeholder="np. Luna" autocomplete="nickname" />
-      </div>
-
-      <div class="field">
-        <label for="code">Kod pokoju</label>
-        <input id="code" maxlength="6" placeholder="np. AB12" autocomplete="off" style="text-transform: uppercase" />
-      </div>
-
-      <div class="field" id="size-field">
-        <label for="size">Rozmiar planszy (nowa gra)</label>
-        <select id="size">
-          <option value="3">3×3</option>
-          <option value="4">4×4</option>
-          <option value="5" selected>5×5</option>
-          <option value="6">6×6</option>
-        </select>
-      </div>
-
-      <div class="actions">
-        <div class="actions-row">
-          <button type="button" id="btn-join">Dołącz</button>
-          <button type="button" class="primary" id="btn-new">Nowa gra</button>
-        </div>
-      </div>
-
-      <div id="lobby-msg" class="notice hidden"></div>
-    </div>
-  </section>
-
-  <section id="game" class="hidden">
-    <div id="winner-banner" class="winner-banner hidden"></div>
-    <header class="topbar">
-      <div class="brand">Bingo</div>
-      <div class="meta">
-        <span>Kod: <span class="code-pill" id="game-code">----</span></span>
-        <span>Ty: <strong id="game-nick">—</strong></span>
-        <span>Linie do wygranej: <strong>1</strong></span>
-      </div>
-      <button type="button" id="btn-leave">Wyjdź</button>
+      <p class="sub">Jedna gra · wspólna plansza · sync na żywo</p>
     </header>
-    <div class="layout">
-      <aside class="players">
-        <h2>Gracze</h2>
-        <ul class="player-list" id="player-list"></ul>
-      </aside>
-      <div class="board-wrap">
-        <div class="board" id="board" role="grid"></div>
-      </div>
+
+    <p id="firebase-warn" class="warn hidden">
+      Uzupełnij <code>firebase-config.js</code> — bez Firebase sync nie działa.
+    </p>
+
+    <label class="field">
+      <span>Nick</span>
+      <input id="nick" type="text" maxlength="20" placeholder="Twoje imię" autocomplete="nickname" />
+    </label>
+
+    <label class="field">
+      <span>Rozmiar planszy</span>
+      <select id="size">
+        <option value="3">3×3</option>
+        <option value="4">4×4</option>
+        <option value="5" selected>5×5</option>
+      </select>
+    </label>
+
+    <div class="actions">
+      <button type="button" id="btn-new" class="primary">Nowa gra</button>
     </div>
-  </section>
+
+    <div class="join-row">
+      <label class="field grow">
+        <span>Kod pokoju</span>
+        <input id="code" type="text" maxlength="4" placeholder="ABCD" autocomplete="off" />
+      </label>
+      <button type="button" id="btn-join" class="ghost">Dołącz</button>
+    </div>
+
+    <p id="setup-error" class="error" hidden></p>
+  </div>
+
+  <div id="game" class="screen hidden">
+    <header class="topbar">
+      <div>
+        <strong id="room-code">----</strong>
+        <span class="muted" id="you-label"></span>
+      </div>
+      <button type="button" id="btn-leave" class="ghost small">Wyjdź</button>
+    </header>
+
+    <ul id="players" class="players"></ul>
+    <p id="winner" class="winner hidden"></p>
+    <div id="board" class="board" role="grid"></div>
+  </div>
 
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>

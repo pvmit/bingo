@@ -1,6 +1,6 @@
 .DS_Store
 Thumbs.db
 *.log
-.env
-.env.*
+.firebase/
+.firebaserc
 node_modules/
