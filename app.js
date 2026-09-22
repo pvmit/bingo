@@ -479,10 +479,6 @@
         if (d1) cell.classList.add("done-p1");
         if (d2) cell.classList.add("done-p2");
         if (win1[idx] || win2[idx]) cell.classList.add("line-win");
-        const marks = el("span", { class: "cell-marks" });
-        if (d1) marks.appendChild(el("i", { style: "background:" + COLORS[1] }));
-        if (d2) marks.appendChild(el("i", { style: "background:" + COLORS[2] }));
-        if (marks.childNodes.length) cell.appendChild(marks);
         board.appendChild(cell);
       });
       boardWrap.appendChild(board);
@@ -575,7 +571,6 @@
   }
 
   function renderPlayer(id) {
-    const other = id === 1 ? 2 : 1;
     const title = el("strong", null, [LABELS[id]]);
     const linesEl = el("span", { class: "muted" }, [""]);
     const status = el("div");
@@ -608,7 +603,6 @@
       empty.classList.add("hidden");
       boardEl.classList.remove("hidden");
       const p = game.players[id];
-      const o = game.players[other];
       title.textContent = p.nick || LABELS[id];
       linesEl.textContent = " - " + countLines(p.done) + " lin.";
       const winSet = game.winnerId === id ? lineCells(p.done) : {};
@@ -623,30 +617,25 @@
         winner.classList.add("hidden");
       }
       game.board.forEach(function (text, idx) {
-        const mine = !!p.done[idx];
-        const theirs = !!o.done[idx];
+        const d1 = !!game.players[1].done[idx];
+        const d2 = !!game.players[2].done[idx];
         const cls =
           "cell" +
-          (mine ? " done done-p" + id : "") +
+          (d1 ? " done-p1" : "") +
+          (d2 ? " done-p2" : "") +
           (winSet[idx] ? " line-win" : "");
-        const btn = el(
-          "button",
-          {
-            type: "button",
-            class: cls,
-            disabled: !!game.winnerId,
-            onClick: function () { toggle(idx); },
-          },
-          [text]
+        boardEl.appendChild(
+          el(
+            "button",
+            {
+              type: "button",
+              class: cls,
+              disabled: !!game.winnerId,
+              onClick: function () { toggle(idx); },
+            },
+            [text]
+          )
         );
-        if (theirs) {
-          btn.appendChild(
-            el("span", { class: "cell-marks" }, [
-              el("i", { style: "background:" + COLORS[other] }),
-            ])
-          );
-        }
-        boardEl.appendChild(btn);
       });
     }
 

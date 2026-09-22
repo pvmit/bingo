@@ -82,41 +82,30 @@ h1 {
 .hidden { display: none !important; }
 
 .cell.done-p1 {
-  box-shadow: inset 3px 0 0 var(--p1);
-  border-color: color-mix(in srgb, var(--p1) 45%, var(--line));
+  background: color-mix(in srgb, var(--p1) 55%, var(--cell));
+  border-color: var(--p1);
+  color: #fff;
 }
 
 .cell.done-p2 {
-  box-shadow: inset -3px 0 0 var(--p2);
-  border-color: color-mix(in srgb, var(--p2) 45%, var(--line));
+  background: color-mix(in srgb, var(--p2) 55%, var(--cell));
+  border-color: var(--p2);
+  color: #fff;
 }
 
-.cell.done.done-p1 {
-  background: color-mix(in srgb, var(--p1) 22%, var(--cell));
-}
-
-.cell.done.done-p2 {
-  background: color-mix(in srgb, var(--p2) 22%, var(--cell));
+.cell.done-p1.done-p2 {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--p1) 65%, var(--cell)) 0 50%,
+    color-mix(in srgb, var(--p2) 65%, var(--cell)) 50% 100%
+  );
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .cell.line-win {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-}
-
-.cell-marks {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  display: flex;
-  gap: 2px;
-}
-
-.cell-marks i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: block;
 }
 
 .role-grid {
@@ -319,42 +308,9 @@ button:disabled {
 
 .cell.readonly { cursor: default; }
 
-.cell.done {
-  background: #24352a;
-  border-color: var(--ok);
-  color: #c8f0d8;
-}
-
-.cell.done-p1 {
-  box-shadow: inset 3px 0 0 var(--p1);
-}
-
-.cell.done-p2 {
-  box-shadow: inset -3px 0 0 var(--p2);
-}
-
-.cell.done-p1.done-p2 {
-  box-shadow: inset 3px 0 0 var(--p1), inset -3px 0 0 var(--p2);
-}
-
 .cell.line-win {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
-}
-
-.cell-marks {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  display: flex;
-  gap: 2px;
-}
-
-.cell-marks i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  display: block;
 }
 
 @media (max-width: 520px) {
