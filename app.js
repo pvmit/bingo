@@ -195,8 +195,19 @@
       }
       syncStatus = "laczenie";
       syncError = "";
+      let settled = false;
+      const failTimer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        syncError = "Timeout PeerJS — sprobuj ponownie";
+        syncStatus = "blad";
+        reject(new Error(syncError));
+      }, 10000);
       peer = new Peer(peerIdFor(code), { debug: 0 });
       peer.on("open", function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(failTimer);
         syncStatus = "host (0 pol.)";
         syncError = "";
         if (typeof repaint === "function") repaint();
@@ -224,6 +235,9 @@
         });
       });
       peer.on("error", function (err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(failTimer);
         syncError = err.type || err.message || String(err);
         syncStatus = "blad";
         if (typeof repaint === "function") repaint();
@@ -494,10 +508,12 @@
         showErr(err.message || String(err));
         return;
       }
+      setRoom(code);
+      history.replaceState(null, "", "#/admin/" + code);
+      paint();
       startHost(code)
         .then(function () {
           broadcastState();
-          history.replaceState(null, "", "#/admin/" + code);
           paint();
         })
         .catch(function (err) {
