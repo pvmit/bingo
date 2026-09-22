@@ -1,39 +1,33 @@
-# Bingo (lockout-lite)
+# Bingo
 
-Proste bingo jak [lockout.live](https://lockout.live/), ale na **jedną grę naraz** — czysto lokalnie, jak `conk` (bez Firebase / konta).
+Proste bingo 5×5 — jak Conquest: **jedno menu ról**, osobne panele.
+
+## Role
+
+| Link | Rola |
+|------|------|
+| `#/` | Menu |
+| `#/admin` | Administrator — nowa gra, reset, podgląd obu |
+| `#/p1` | Gracz 1 |
+| `#/p2` | Gracz 2 |
+
+Plansza zawsze **5×5**. Cele z [`goals.js`](goals.js).
 
 ## Jak grać
 
-1. Otwórz stronę (Pages lub lokalnie).
-2. Wpisz graczy po przecinku, wybierz rozmiar → **Nowa gra**.
-3. Kliknij gracza na liście, żeby ustawić kto klika, potem odhaczaj cele.
-4. Pierwsza ukończona linia (wiersz / kolumna / przekątna) wygrywa.
-5. **Kopiuj link** — ten sam stan planszy można otworzyć na drugim urządzeniu (zapis w adresie URL).
+1. Na laptopie otwórz **Administrator** → wpisz nicki → **Nowa gra**.
+2. Na dwóch telefonach (lub kartach) wejdź w **Gracz 1** / **Gracz 2**.
+3. Każdy odhacza swoje cele. Pierwsza linia wygrywa.
 
-## Edycja puli celów
+Stan trzyma się w `localStorage` (sync między kartami tej samej przeglądarki). Bez Firebase — jak tryb demo w Conquest.
 
-Jedyny plik z treścią: **[`goals.js`](goals.js)**.
+## Edycja puli
 
 ```js
-window.GOALS = [
-  "Zrób 20 przysiadów",
-  "Wymień 5 punktów Prawa Harcerskiego",
-  // ...
-];
+// goals.js
+window.GOALS = [ "…", "…" ]; // min. 25 pozycji
 ```
 
-Na planszę `N×N` potrzeba co najmniej `N²` pozycji (dla 5×5 → min. 25).
+## Adres
 
-## Lokalnie / Pages
-
-Wystarczy otworzyć `index.html` albo:
 https://pvmit.github.io/bingo/
-
-## Pliki
-
-| Plik | Rola |
-|------|------|
-| `goals.js` | Pula celów |
-| `index.html` | UI |
-| `style.css` | Styl |
-| `app.js` | Losowanie, linie, zwycięzca, stan w URL |

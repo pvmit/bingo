@@ -1,32 +1,11 @@
 (() => {
-  const COLORS = [
-    "#e8c200", "#3ecf8e", "#5b8cff", "#e23d4a",
-    "#c084fc", "#fb923c", "#22d3ee", "#f472b6",
-  ];
+  const SIZE = 5;
+  const NEED = SIZE * SIZE;
+  const STORE_KEY = "bingo.v1";
+  const COLORS = { 1: "#e23d4a", 2: "#5b8cff" };
+  const LABELS = { 1: "Gracz 1", 2: "Gracz 2" };
 
-  const el = {
-    setup: document.getElementById("setup"),
-    game: document.getElementById("game"),
-    size: document.getElementById("size"),
-    names: document.getElementById("names"),
-    btnNew: document.getElementById("btn-new"),
-    btnLeave: document.getElementById("btn-leave"),
-    btnCopy: document.getElementById("btn-copy"),
-    setupError: document.getElementById("setup-error"),
-    roomCode: document.getElementById("room-code"),
-    activeLabel: document.getElementById("active-label"),
-    players: document.getElementById("players"),
-    winner: document.getElementById("winner"),
-    board: document.getElementById("board"),
-  };
-
-  let state = null;
-  // { code, size, seed, board, players:[{id,nick,color,done:{} }], activeId, winnerId }
-
-  function showError(msg) {
-    el.setupError.hidden = !msg;
-    el.setupError.textContent = msg || "";
-  }
+  const app = document.getElementById("app");
 
   function mulberry32(seed) {
     let a = seed >>> 0;
@@ -48,307 +27,391 @@
     return h >>> 0;
   }
 
-  function randomCode() {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let out = "";
-    const bytes = crypto.getRandomValues(new Uint8Array(4));
-    for (let i = 0; i < 4; i++) out += alphabet[bytes[i] % alphabet.length];
-    return out;
-  }
-
-  function pickBoard(size, seedStr) {
+  function pickBoard(seedStr) {
     const pool = Array.isArray(window.GOALS) ? window.GOALS.slice() : [];
-    const need = size * size;
-    if (pool.length < need) {
-      throw new Error(`Za mało celów w goals.js (potrzeba ${need}, jest ${pool.length}).`);
+    if (pool.length < NEED) {
+      throw new Error(`Za mało celów w goals.js (potrzeba ${NEED}).`);
     }
     const rand = mulberry32(hashSeed(seedStr));
     for (let i = pool.length - 1; i > 0; i--) {
       const j = Math.floor(rand() * (i + 1));
       [pool[i], pool[j]] = [pool[j], pool[i]];
     }
-    return pool.slice(0, need);
+    return pool.slice(0, NEED);
   }
 
-  function countLines(done, size) {
-    const at = (r, c) => !!done[r * size + c];
+  function countLines(done) {
+    const at = (r, c) => !!done[r * SIZE + c];
     let lines = 0;
-    for (let r = 0; r < size; r++) {
+    for (let r = 0; r < SIZE; r++) {
       let ok = true;
-      for (let c = 0; c < size; c++) if (!at(r, c)) { ok = false; break; }
+      for (let c = 0; c < SIZE; c++) if (!at(r, c)) { ok = false; break; }
       if (ok) lines++;
     }
-    for (let c = 0; c < size; c++) {
+    for (let c = 0; c < SIZE; c++) {
       let ok = true;
-      for (let r = 0; r < size; r++) if (!at(r, c)) { ok = false; break; }
+      for (let r = 0; r < SIZE; r++) if (!at(r, c)) { ok = false; break; }
       if (ok) lines++;
     }
     let d1 = true;
     let d2 = true;
-    for (let i = 0; i < size; i++) {
+    for (let i = 0; i < SIZE; i++) {
       if (!at(i, i)) d1 = false;
-      if (!at(i, size - 1 - i)) d2 = false;
+      if (!at(i, SIZE - 1 - i)) d2 = false;
     }
     if (d1) lines++;
     if (d2) lines++;
     return lines;
   }
 
-  function lineCellIndexes(done, size) {
+  function lineCells(done) {
     const marked = new Set();
-    const at = (r, c) => !!done[r * size + c];
-    for (let r = 0; r < size; r++) {
+    const at = (r, c) => !!done[r * SIZE + c];
+    for (let r = 0; r < SIZE; r++) {
       let ok = true;
-      for (let c = 0; c < size; c++) if (!at(r, c)) { ok = false; break; }
-      if (ok) for (let c = 0; c < size; c++) marked.add(r * size + c);
+      for (let c = 0; c < SIZE; c++) if (!at(r, c)) { ok = false; break; }
+      if (ok) for (let c = 0; c < SIZE; c++) marked.add(r * SIZE + c);
     }
-    for (let c = 0; c < size; c++) {
+    for (let c = 0; c < SIZE; c++) {
       let ok = true;
-      for (let r = 0; r < size; r++) if (!at(r, c)) { ok = false; break; }
-      if (ok) for (let r = 0; r < size; r++) marked.add(r * size + c);
+      for (let r = 0; r < SIZE; r++) if (!at(r, c)) { ok = false; break; }
+      if (ok) for (let r = 0; r < SIZE; r++) marked.add(r * SIZE + c);
     }
     let d1 = true;
     let d2 = true;
-    for (let i = 0; i < size; i++) {
+    for (let i = 0; i < SIZE; i++) {
       if (!at(i, i)) d1 = false;
-      if (!at(i, size - 1 - i)) d2 = false;
+      if (!at(i, SIZE - 1 - i)) d2 = false;
     }
-    if (d1) for (let i = 0; i < size; i++) marked.add(i * size + i);
-    if (d2) for (let i = 0; i < size; i++) marked.add(i * size + (size - 1 - i));
+    if (d1) for (let i = 0; i < SIZE; i++) marked.add(i * SIZE + i);
+    if (d2) for (let i = 0; i < SIZE; i++) marked.add(i * SIZE + (SIZE - 1 - i));
     return marked;
   }
 
-  function parseNames(raw) {
-    return String(raw || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .slice(0, 8);
+  function emptyDone() {
+    return {};
   }
 
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-
-  function persist() {
-    if (!state) {
-      history.replaceState(null, "", location.pathname + location.search);
-      return;
-    }
-    const payload = {
-      c: state.code,
-      s: state.size,
-      seed: state.seed,
-      a: state.activeId,
-      w: state.winnerId,
-      p: state.players.map((p) => ({
-        id: p.id,
-        n: p.nick,
-        col: p.color,
-        d: Object.keys(p.done).filter((k) => p.done[k]).map(Number),
-      })),
+  function newGame(nicks) {
+    const seed = `bingo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return {
+      seed,
+      board: pickBoard(seed),
+      players: {
+        1: { nick: nicks[1] || LABELS[1], done: emptyDone() },
+        2: { nick: nicks[2] || LABELS[2], done: emptyDone() },
+      },
+      winnerId: null,
+      updatedAt: Date.now(),
     };
-    const hash = "#g=" + encodeURIComponent(JSON.stringify(payload));
-    history.replaceState(null, "", location.pathname + location.search + hash);
   }
 
-  function loadFromHash() {
-    const m = location.hash.match(/#g=(.+)$/);
-    if (!m) return null;
+  function loadGame() {
     try {
-      const raw = JSON.parse(decodeURIComponent(m[1]));
-      const size = Number(raw.s) || 5;
-      const seed = String(raw.seed || "");
-      const board = pickBoard(size, seed);
-      const players = (raw.p || []).map((p, i) => {
-        const done = {};
-        (p.d || []).forEach((idx) => { done[idx] = true; });
-        return {
-          id: p.id || `p${i}`,
-          nick: p.n || `Gracz ${i + 1}`,
-          color: p.col || COLORS[i % COLORS.length],
-          done,
-        };
-      });
-      if (!players.length) return null;
-      return {
-        code: raw.c || randomCode(),
-        size,
-        seed,
-        board,
-        players,
-        activeId: raw.a || players[0].id,
-        winnerId: raw.w || null,
-      };
+      const raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return null;
+      const g = JSON.parse(raw);
+      if (!g || !Array.isArray(g.board) || g.board.length !== NEED) return null;
+      if (!g.players || !g.players[1] || !g.players[2]) return null;
+      return g;
     } catch (_) {
       return null;
     }
   }
 
-  function showSetup() {
-    el.setup.classList.remove("hidden");
-    el.game.classList.add("hidden");
+  function saveGame(g) {
+    g.updatedAt = Date.now();
+    localStorage.setItem(STORE_KEY, JSON.stringify(g));
+    try {
+      channel.postMessage({ type: "sync", at: g.updatedAt });
+    } catch (_) { /* ignore */ }
   }
 
-  function showGame() {
-    el.setup.classList.add("hidden");
-    el.game.classList.remove("hidden");
+  const channel = ("BroadcastChannel" in window)
+    ? new BroadcastChannel("bingo.v1")
+    : { postMessage() {}, close() {} };
+
+  function route() {
+    const h = (location.hash || "#/").replace(/^#/, "") || "/";
+    if (h === "/admin") return { view: "admin" };
+    if (h === "/p1" || h === "/player/1") return { view: "player", id: 1 };
+    if (h === "/p2" || h === "/player/2") return { view: "player", id: 2 };
+    return { view: "home" };
   }
 
-  function activePlayer() {
-    if (!state) return null;
-    return state.players.find((p) => p.id === state.activeId) || state.players[0];
-  }
-
-  function render() {
-    if (!state) return;
-    const size = state.size;
-    const me = activePlayer();
-    const myDone = (me && me.done) || {};
-    const winCells =
-      me && countLines(myDone, size) > 0 ? lineCellIndexes(myDone, size) : new Set();
-    const ended = !!state.winnerId;
-
-    el.roomCode.textContent = state.code;
-    el.activeLabel.textContent = me ? `· klika: ${me.nick}` : "";
-
-    el.players.innerHTML = "";
-    state.players.forEach((p) => {
-      const lines = countLines(p.done, size);
-      const li = document.createElement("li");
-      if (p.id === state.activeId) li.classList.add("me");
-      li.innerHTML =
-        `<span class="dot" style="background:${p.color}"></span>` +
-        `<span>${escapeHtml(p.nick)}</span>` +
-        `<span class="lines">${lines} lin.</span>`;
-      li.title = "Ustaw jako aktywnego gracza";
-      li.addEventListener("click", () => {
-        if (state.winnerId) return;
-        state.activeId = p.id;
-        persist();
-        render();
+  function el(tag, attrs, kids) {
+    const node = document.createElement(tag);
+    if (attrs) {
+      Object.entries(attrs).forEach(([k, v]) => {
+        if (k === "class") node.className = v;
+        else if (k === "text") node.textContent = v;
+        else if (k.startsWith("on") && typeof v === "function") {
+          node.addEventListener(k.slice(2).toLowerCase(), v);
+        } else if (v !== false && v != null) node.setAttribute(k, v === true ? "" : v);
       });
-      el.players.appendChild(li);
-    });
-
-    if (state.winnerId) {
-      const win = state.players.find((p) => p.id === state.winnerId);
-      el.winner.classList.remove("hidden");
-      el.winner.textContent = win ? `Bingo! Wygrywa ${win.nick}.` : "Bingo!";
-    } else {
-      el.winner.classList.add("hidden");
-      el.winner.textContent = "";
     }
+    (kids || []).forEach((c) => {
+      if (c == null || c === false) return;
+      node.append(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return node;
+  }
 
-    el.board.style.gridTemplateColumns = `repeat(${size}, minmax(0, 1fr))`;
-    el.board.innerHTML = "";
-    state.board.forEach((text, idx) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "cell";
-      btn.textContent = text;
-      if (myDone[idx]) btn.classList.add("done");
-      if (winCells.has(idx)) btn.classList.add("line-win");
+  function go(hash) {
+    location.hash = hash;
+  }
 
-      // Show small dots for other players who also have this cell
-      const others = state.players.filter(
-        (p) => p.id !== state.activeId && p.done[idx]
-      );
-      if (others.length) {
-        const marks = document.createElement("span");
-        marks.className = "cell-marks";
-        others.forEach((p) => {
-          const d = document.createElement("i");
-          d.style.background = p.color;
-          marks.appendChild(d);
-        });
-        btn.appendChild(marks);
+  function renderHome() {
+    const g = loadGame();
+    app.replaceChildren(
+      el("section", { class: "screen home" }, [
+        el("h1", {}, ["BINGO"]),
+        el("p", { class: "lead" }, ["Wybierz rolę tego urządzenia"]),
+        g
+          ? el("p", { class: "status-ok" }, ["Gra aktywna · 5×5"])
+          : el("p", { class: "status-muted" }, ["Brak gry — admin uruchamia nową"]),
+        el("div", { class: "role-grid" }, [
+          el("button", { class: "role p1", onClick: () => go("#/p1") }, ["GRACZ 1"]),
+          el("button", { class: "role p2", onClick: () => go("#/p2") }, ["GRACZ 2"]),
+          el("button", { class: "role admin", onClick: () => go("#/admin") }, ["ADMINISTRATOR"]),
+        ]),
+      ])
+    );
+  }
+
+  function renderAdmin() {
+    let g = loadGame();
+    const nick1 = el("input", {
+      type: "text",
+      maxlength: "16",
+      value: g?.players[1]?.nick || LABELS[1],
+      placeholder: "Gracz 1",
+    });
+    const nick2 = el("input", {
+      type: "text",
+      maxlength: "16",
+      value: g?.players[2]?.nick || LABELS[2],
+      placeholder: "Gracz 2",
+    });
+    const error = el("p", { class: "error hidden" });
+    const boardWrap = el("div", { class: "admin-boards" });
+    const summary = el("div", { class: "admin-summary" });
+
+    function paint() {
+      g = loadGame();
+      summary.replaceChildren();
+      boardWrap.replaceChildren();
+      if (!g) {
+        summary.append(el("p", { class: "status-muted" }, ["Brak aktywnej gry."]));
+        return;
+      }
+      [1, 2].forEach((id) => {
+        const p = g.players[id];
+        const lines = countLines(p.done);
+        summary.append(
+          el("div", { class: `sum-card p${id}` }, [
+            el("strong", {}, [p.nick]),
+            el("span", {}, [`${lines} lin.`]),
+            el("span", { class: "muted" }, [
+              `${Object.keys(p.done).filter((k) => p.done[k]).length}/${NEED}`,
+            ]),
+          ])
+        );
+      });
+      if (g.winnerId) {
+        const w = g.players[g.winnerId];
+        summary.append(
+          el("p", { class: "winner" }, [`Bingo! Wygrywa ${w?.nick || "gracz"}.`])
+        );
       }
 
-      btn.disabled = ended;
-      btn.addEventListener("click", () => toggleCell(idx));
-      el.board.appendChild(btn);
-    });
-  }
-
-  function toggleCell(idx) {
-    if (!state || state.winnerId) return;
-    const me = activePlayer();
-    if (!me) return;
-    me.done[idx] = !me.done[idx];
-    if (!me.done[idx]) delete me.done[idx];
-
-    const lines = countLines(me.done, state.size);
-    if (lines >= 1) {
-      state.winnerId = me.id;
-    }
-    persist();
-    render();
-  }
-
-  function createGame() {
-    showError("");
-    const size = Number(el.size.value) || 5;
-    let names = parseNames(el.names.value);
-    if (!names.length) names = ["Gracz 1"];
-    const code = randomCode();
-    const seed = `${code}-${Date.now()}`;
-    let board;
-    try {
-      board = pickBoard(size, seed);
-    } catch (err) {
-      showError(err.message);
-      return;
+      // One shared board with both colors
+      const board = el("div", { class: "board admin-board" });
+      board.style.gridTemplateColumns = `repeat(${SIZE}, minmax(0, 1fr))`;
+      const win1 = g.winnerId === 1 ? lineCells(g.players[1].done) : new Set();
+      const win2 = g.winnerId === 2 ? lineCells(g.players[2].done) : new Set();
+      g.board.forEach((text, idx) => {
+        const d1 = !!g.players[1].done[idx];
+        const d2 = !!g.players[2].done[idx];
+        const cell = el("div", { class: "cell readonly" }, [text]);
+        if (d1) cell.classList.add("done-p1");
+        if (d2) cell.classList.add("done-p2");
+        if (win1.has(idx) || win2.has(idx)) cell.classList.add("line-win");
+        const marks = el("span", { class: "cell-marks" });
+        if (d1) marks.append(el("i", { style: `background:${COLORS[1]}` }));
+        if (d2) marks.append(el("i", { style: `background:${COLORS[2]}` }));
+        if (marks.childNodes.length) cell.append(marks);
+        board.append(cell);
+      });
+      boardWrap.append(board);
     }
 
-    state = {
-      code,
-      size,
-      seed,
-      board,
-      players: names.map((nick, i) => ({
-        id: `p${i}-${code}`,
-        nick,
-        color: COLORS[i % COLORS.length],
-        done: {},
-      })),
-      activeId: null,
-      winnerId: null,
-    };
-    state.activeId = state.players[0].id;
-    persist();
-    showGame();
-    render();
+    function startNew() {
+      error.classList.add("hidden");
+      try {
+        g = newGame({ 1: nick1.value.trim() || LABELS[1], 2: nick2.value.trim() || LABELS[2] });
+        saveGame(g);
+        paint();
+      } catch (err) {
+        error.textContent = err.message || String(err);
+        error.classList.remove("hidden");
+      }
+    }
+
+    function resetGame() {
+      if (!g && !loadGame()) return;
+      if (!confirm("Zresetować grę? Plansza i postępy znikną.")) return;
+      localStorage.removeItem(STORE_KEY);
+      g = null;
+      paint();
+    }
+
+    app.replaceChildren(
+      el("section", { class: "screen admin" }, [
+        el("div", { class: "topbar" }, [
+          el("button", { class: "ghost small", onClick: () => go("#/") }, ["← Menu"]),
+          el("strong", {}, ["ADMIN"]),
+        ]),
+        el("h1", { class: "admin-title" }, ["BINGO"]),
+        el("p", { class: "lead" }, ["Plansza zawsze 5×5 · podgląd obu graczy"]),
+        el("div", { class: "admin-nicks" }, [
+          el("label", { class: "field" }, [
+            el("span", {}, ["Gracz 1"]),
+            nick1,
+          ]),
+          el("label", { class: "field" }, [
+            el("span", {}, ["Gracz 2"]),
+            nick2,
+          ]),
+        ]),
+        el("div", { class: "admin-actions" }, [
+          el("button", { class: "primary", onClick: startNew }, ["Nowa gra"]),
+          el("button", { class: "danger", onClick: resetGame }, ["Reset gry"]),
+        ]),
+        error,
+        summary,
+        boardWrap,
+      ])
+    );
+    paint();
+    return paint;
   }
 
-  function leaveGame() {
-    state = null;
-    persist();
-    showSetup();
+  function renderPlayer(id) {
+    const other = id === 1 ? 2 : 1;
+    let g = loadGame();
+
+    const title = el("strong", {}, [LABELS[id]]);
+    const linesEl = el("span", { class: "muted" }, [""]);
+    const winner = el("p", { class: "winner hidden" });
+    const boardEl = el("div", { class: "board" });
+    boardEl.style.gridTemplateColumns = `repeat(${SIZE}, minmax(0, 1fr))`;
+    const empty = el("p", { class: "status-muted" }, [
+      "Brak gry. Poczekaj, aż admin kliknie „Nowa gra”.",
+    ]);
+
+    function toggle(idx) {
+      g = loadGame();
+      if (!g || g.winnerId) return;
+      const p = g.players[id];
+      if (p.done[idx]) delete p.done[idx];
+      else p.done[idx] = true;
+      if (countLines(p.done) >= 1) g.winnerId = id;
+      saveGame(g);
+      paint();
+    }
+
+    function paint() {
+      g = loadGame();
+      boardEl.replaceChildren();
+      if (!g) {
+        empty.classList.remove("hidden");
+        boardEl.classList.add("hidden");
+        winner.classList.add("hidden");
+        linesEl.textContent = "";
+        title.textContent = LABELS[id];
+        return;
+      }
+      empty.classList.add("hidden");
+      boardEl.classList.remove("hidden");
+      const p = g.players[id];
+      const o = g.players[other];
+      title.textContent = p.nick || LABELS[id];
+      const lines = countLines(p.done);
+      linesEl.textContent = `· ${lines} lin.`;
+      const winSet = g.winnerId === id ? lineCells(p.done) : new Set();
+
+      if (g.winnerId) {
+        const w = g.players[g.winnerId];
+        winner.classList.remove("hidden");
+        winner.textContent =
+          g.winnerId === id
+            ? `Bingo! Wygrywasz, ${w.nick}.`
+            : `Bingo! Wygrywa ${w.nick}.`;
+      } else {
+        winner.classList.add("hidden");
+      }
+
+      g.board.forEach((text, idx) => {
+        const mine = !!p.done[idx];
+        const theirs = !!o.done[idx];
+        const btn = el("button", {
+          type: "button",
+          class: `cell${mine ? " done" : ""}${winSet.has(idx) ? " line-win" : ""}`,
+          disabled: !!g.winnerId,
+          onClick: () => toggle(idx),
+        }, [text]);
+        if (theirs) {
+          const marks = el("span", { class: "cell-marks" }, [
+            el("i", { style: `background:${COLORS[other]}` }),
+          ]);
+          btn.append(marks);
+        }
+        boardEl.append(btn);
+      });
+    }
+
+    app.replaceChildren(
+      el("section", { class: "screen player" }, [
+        el("div", { class: "topbar" }, [
+          el("button", { class: "ghost small", onClick: () => go("#/") }, ["← Menu"]),
+          el("div", {}, [
+            title,
+            linesEl,
+          ]),
+          el("span", {
+            class: "badge",
+            style: `background:${COLORS[id]}`,
+          }, [`P${id}`]),
+        ]),
+        winner,
+        empty,
+        boardEl,
+      ])
+    );
+    paint();
+    return paint;
   }
 
-  async function copyLink() {
-    try {
-      await navigator.clipboard.writeText(location.href);
-      el.btnCopy.textContent = "Skopiowano";
-      setTimeout(() => { el.btnCopy.textContent = "Kopiuj link"; }, 1200);
-    } catch (_) {
-      prompt("Skopiuj link:", location.href);
+  let repaint = null;
+
+  function mount() {
+    const r = route();
+    if (r.view === "admin") repaint = renderAdmin();
+    else if (r.view === "player") repaint = renderPlayer(r.id);
+    else {
+      repaint = null;
+      renderHome();
     }
   }
 
-  el.btnNew.addEventListener("click", createGame);
-  el.btnLeave.addEventListener("click", leaveGame);
-  el.btnCopy.addEventListener("click", copyLink);
+  window.addEventListener("hashchange", mount);
+  window.addEventListener("storage", (e) => {
+    if (e.key === STORE_KEY && typeof repaint === "function") repaint();
+  });
+  channel.onmessage = () => {
+    if (typeof repaint === "function") repaint();
+  };
 
-  const restored = loadFromHash();
-  if (restored) {
-    state = restored;
-    showGame();
-    render();
-  }
+  mount();
 })();
