@@ -1,18 +1,19 @@
 (() => {
   const SIZE = 5;
   const CELL_COUNT = SIZE * SIZE;
-  const STORE_KEY = "bingo.v1";
-  const CHANNEL_NAME = "bingo.v1";
   const COLORS = { 1: "#e23d4a", 2: "#5b8cff" };
   const LABELS = { 1: "Gracz 1", 2: "Gracz 2" };
+  const ROOM_KEY = "bingo.room";
 
   const app = document.getElementById("app");
+  let game = null;
+  let roomCode = sessionStorage.getItem(ROOM_KEY) || "";
+  let peer = null;
+  let hostConn = null;
+  const clients = [];
   let repaint = null;
-
-  const channel =
-    typeof BroadcastChannel !== "undefined"
-      ? new BroadcastChannel(CHANNEL_NAME)
-      : { postMessage: function () {}, close: function () {} };
+  let syncStatus = "offline";
+  let syncError = "";
 
   function mulberry32(seed) {
     let a = seed >>> 0;
@@ -51,17 +52,19 @@
 
   function countLines(done) {
     const at = function (r, c) {
-      return !!done[r * SIZE + c];
+      return !!(done && done[r * SIZE + c]);
     };
     let lines = 0;
-    for (let r = 0; r < SIZE; r++) {
+    let r;
+    let c;
+    for (r = 0; r < SIZE; r++) {
       let ok = true;
-      for (let c = 0; c < SIZE; c++) if (!at(r, c)) { ok = false; break; }
+      for (c = 0; c < SIZE; c++) if (!at(r, c)) { ok = false; break; }
       if (ok) lines++;
     }
-    for (let c = 0; c < SIZE; c++) {
+    for (c = 0; c < SIZE; c++) {
       let ok = true;
-      for (let r = 0; r < SIZE; r++) if (!at(r, c)) { ok = false; break; }
+      for (r = 0; r < SIZE; r++) if (!at(r, c)) { ok = false; break; }
       if (ok) lines++;
     }
     let d1 = true;
@@ -78,20 +81,22 @@
   function lineCells(done) {
     const marked = {};
     const at = function (r, c) {
-      return !!done[r * SIZE + c];
+      return !!(done && done[r * SIZE + c]);
     };
     const add = function (idx) {
       marked[idx] = true;
     };
-    for (let r = 0; r < SIZE; r++) {
+    let r;
+    let c;
+    for (r = 0; r < SIZE; r++) {
       let ok = true;
-      for (let c = 0; c < SIZE; c++) if (!at(r, c)) { ok = false; break; }
-      if (ok) for (let c = 0; c < SIZE; c++) add(r * SIZE + c);
+      for (c = 0; c < SIZE; c++) if (!at(r, c)) { ok = false; break; }
+      if (ok) for (c = 0; c < SIZE; c++) add(r * SIZE + c);
     }
-    for (let c = 0; c < SIZE; c++) {
+    for (c = 0; c < SIZE; c++) {
       let ok = true;
-      for (let r = 0; r < SIZE; r++) if (!at(r, c)) { ok = false; break; }
-      if (ok) for (let r = 0; r < SIZE; r++) add(r * SIZE + c);
+      for (r = 0; r < SIZE; r++) if (!at(r, c)) { ok = false; break; }
+      if (ok) for (r = 0; r < SIZE; r++) add(r * SIZE + c);
     }
     let d1 = true;
     let d2 = true;
@@ -106,8 +111,21 @@
 
   function doneCount(done) {
     let n = 0;
+    if (!done) return 0;
     for (const k in done) if (done[k]) n++;
     return n;
+  }
+
+  function randomCode() {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let out = "";
+    const bytes = crypto.getRandomValues(new Uint8Array(4));
+    for (let i = 0; i < 4; i++) out += alphabet[bytes[i] % alphabet.length];
+    return out;
+  }
+
+  function peerIdFor(code) {
+    return "bingo-" + String(code).toUpperCase();
   }
 
   function newGame(nicks) {
@@ -124,41 +142,167 @@
     };
   }
 
-  function loadGame() {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (!raw) return null;
-      const g = JSON.parse(raw);
-      if (!g || !Array.isArray(g.board) || g.board.length !== CELL_COUNT) return null;
-      if (!g.players || !g.players[1] || !g.players[2]) return null;
-      if (!g.players[1].done) g.players[1].done = {};
-      if (!g.players[2].done) g.players[2].done = {};
-      return g;
-    } catch (e) {
-      return null;
+  function setRoom(code) {
+    roomCode = String(code || "").toUpperCase();
+    if (roomCode) sessionStorage.setItem(ROOM_KEY, roomCode);
+    else sessionStorage.removeItem(ROOM_KEY);
+  }
+
+  function openClients() {
+    return clients.filter(function (c) {
+      return c.open;
+    }).length;
+  }
+
+  function broadcastState() {
+    const payload = { type: "state", game: game };
+    clients.forEach(function (c) {
+      if (c.open) c.send(payload);
+    });
+  }
+
+  function applyToggle(playerId, idx) {
+    if (!game || game.winnerId) return false;
+    const p = game.players[playerId];
+    if (!p) return false;
+    if (p.done[idx]) delete p.done[idx];
+    else p.done[idx] = true;
+    if (countLines(p.done) >= 1) game.winnerId = playerId;
+    game.updatedAt = Date.now();
+    return true;
+  }
+
+  function destroyPeer() {
+    while (clients.length) clients.pop();
+    if (hostConn) {
+      try { hostConn.close(); } catch (e) { /* ignore */ }
+      hostConn = null;
     }
+    if (peer) {
+      try { peer.destroy(); } catch (e) { /* ignore */ }
+      peer = null;
+    }
+    syncStatus = "offline";
   }
 
-  function saveGame(g) {
-    g.updatedAt = Date.now();
-    localStorage.setItem(STORE_KEY, JSON.stringify(g));
-    try {
-      channel.postMessage({ type: "sync", at: g.updatedAt });
-    } catch (e) { /* ignore */ }
+  function startHost(code) {
+    return new Promise(function (resolve, reject) {
+      destroyPeer();
+      setRoom(code);
+      if (typeof Peer === "undefined") {
+        reject(new Error("PeerJS nie zaladowany — sprawdz internet / CDN."));
+        return;
+      }
+      syncStatus = "laczenie";
+      syncError = "";
+      peer = new Peer(peerIdFor(code), { debug: 0 });
+      peer.on("open", function () {
+        syncStatus = "host (0 pol.)";
+        syncError = "";
+        if (typeof repaint === "function") repaint();
+        resolve();
+      });
+      peer.on("connection", function (conn) {
+        clients.push(conn);
+        conn.on("open", function () {
+          conn.send({ type: "state", game: game });
+          syncStatus = "host (" + openClients() + " pol.)";
+          if (typeof repaint === "function") repaint();
+        });
+        conn.on("data", function (msg) {
+          if (!msg || msg.type !== "toggle") return;
+          if (applyToggle(msg.playerId, msg.idx)) {
+            broadcastState();
+            if (typeof repaint === "function") repaint();
+          }
+        });
+        conn.on("close", function () {
+          const i = clients.indexOf(conn);
+          if (i >= 0) clients.splice(i, 1);
+          syncStatus = "host (" + openClients() + " pol.)";
+          if (typeof repaint === "function") repaint();
+        });
+      });
+      peer.on("error", function (err) {
+        syncError = err.type || err.message || String(err);
+        syncStatus = "blad";
+        if (typeof repaint === "function") repaint();
+        reject(err);
+      });
+    });
   }
 
-  function clearGame() {
-    localStorage.removeItem(STORE_KEY);
-    try {
-      channel.postMessage({ type: "sync", at: Date.now() });
-    } catch (e) { /* ignore */ }
+  function joinHost(code) {
+    return new Promise(function (resolve, reject) {
+      destroyPeer();
+      setRoom(code);
+      if (typeof Peer === "undefined") {
+        reject(new Error("PeerJS nie zaladowany — sprawdz internet / CDN."));
+        return;
+      }
+      syncStatus = "laczenie";
+      syncError = "";
+      peer = new Peer({ debug: 0 });
+      peer.on("open", function () {
+        hostConn = peer.connect(peerIdFor(code), { reliable: true });
+        hostConn.on("open", function () {
+          syncStatus = "polaczono";
+          syncError = "";
+          if (typeof repaint === "function") repaint();
+          resolve();
+        });
+        hostConn.on("data", function (msg) {
+          if (!msg || msg.type !== "state") return;
+          game = msg.game;
+          if (typeof repaint === "function") repaint();
+        });
+        hostConn.on("close", function () {
+          syncStatus = "rozlaczono";
+          if (typeof repaint === "function") repaint();
+        });
+        hostConn.on("error", function (err) {
+          syncError = err.message || String(err);
+          syncStatus = "blad";
+          if (typeof repaint === "function") repaint();
+        });
+      });
+      peer.on("error", function (err) {
+        syncError = err.type || err.message || String(err);
+        syncStatus = "blad";
+        if (typeof repaint === "function") repaint();
+        reject(err);
+      });
+    });
+  }
+
+  function sendToggle(playerId, idx) {
+    if (hostConn && hostConn.open) {
+      hostConn.send({ type: "toggle", playerId: playerId, idx: idx });
+      return true;
+    }
+    // Host (admin) clicking as spectator shouldn't mark; players on host device:
+    if (peer && !hostConn && applyToggle(playerId, idx)) {
+      broadcastState();
+      return true;
+    }
+    return false;
   }
 
   function route() {
-    const h = (location.hash || "#/").replace(/^#/, "") || "/";
-    if (h === "/admin") return { view: "admin" };
-    if (h === "/p1" || h === "/player/1") return { view: "player", id: 1 };
-    if (h === "/p2" || h === "/player/2") return { view: "player", id: 2 };
+    const raw = (location.hash || "#/").replace(/^#/, "") || "/";
+    const parts = raw.split("/").filter(Boolean);
+    if (parts[0] === "admin") {
+      if (parts[1]) setRoom(parts[1]);
+      return { view: "admin" };
+    }
+    if (parts[0] === "p1") {
+      if (parts[1]) setRoom(parts[1]);
+      return { view: "player", id: 1 };
+    }
+    if (parts[0] === "p2") {
+      if (parts[1]) setRoom(parts[1]);
+      return { view: "player", id: 2 };
+    }
     return { view: "home" };
   }
 
@@ -187,82 +331,141 @@
     location.hash = hash;
   }
 
+  function syncBadge() {
+    if (syncError) return el("p", { class: "error" }, ["Sync: " + syncError]);
+    let label = "Brak pokoju";
+    if (roomCode) {
+      if (syncStatus.indexOf("host") === 0) label = "Host " + roomCode + " · " + syncStatus;
+      else if (syncStatus === "polaczono") label = "Polaczono z " + roomCode;
+      else if (syncStatus === "laczenie") label = "Laczenie z " + roomCode + "…";
+      else label = "Pokoj " + roomCode + " · " + syncStatus;
+    }
+    const ok = syncStatus === "polaczono" || syncStatus.indexOf("host") === 0;
+    return el("p", { class: ok ? "status-ok" : "status-muted" }, [label]);
+  }
+
   function renderHome() {
-    const g = loadGame();
+    const codeInput = el("input", {
+      type: "text",
+      maxlength: "4",
+      placeholder: "ABCD",
+      value: roomCode,
+      class: "code-input",
+    });
     app.replaceChildren(
       el("section", { class: "screen home" }, [
         el("h1", null, ["BINGO"]),
-        el("p", { class: "lead" }, ["Wybierz role tego urzadzenia"]),
-        g
-          ? el("p", { class: "status-ok" }, ["Gra aktywna · 5×5"])
-          : el("p", { class: "status-muted" }, ["Brak gry — admin uruchamia nowa"]),
+        el("p", { class: "lead" }, ["3 urzadzenia · wspolna plansza 5×5"]),
+        el("label", { class: "field" }, [
+          el("span", null, ["Kod pokoju (od admina)"]),
+          codeInput,
+        ]),
         el("div", { class: "role-grid" }, [
-          el("button", { class: "role p1", type: "button", onClick: function () { go("#/p1"); } }, ["GRACZ 1"]),
-          el("button", { class: "role p2", type: "button", onClick: function () { go("#/p2"); } }, ["GRACZ 2"]),
-          el("button", { class: "role admin", type: "button", onClick: function () { go("#/admin"); } }, ["ADMINISTRATOR"]),
+          el("button", {
+            class: "role p1",
+            type: "button",
+            onClick: function () {
+              const c = codeInput.value.trim().toUpperCase();
+              if (c.length !== 4) {
+                alert("Wpisz 4-znakowy kod z panelu admina.");
+                return;
+              }
+              setRoom(c);
+              go("#/p1/" + c);
+            },
+          }, ["GRACZ 1"]),
+          el("button", {
+            class: "role p2",
+            type: "button",
+            onClick: function () {
+              const c = codeInput.value.trim().toUpperCase();
+              if (c.length !== 4) {
+                alert("Wpisz 4-znakowy kod z panelu admina.");
+                return;
+              }
+              setRoom(c);
+              go("#/p2/" + c);
+            },
+          }, ["GRACZ 2"]),
+          el("button", {
+            class: "role admin",
+            type: "button",
+            onClick: function () { go("#/admin"); },
+          }, ["ADMINISTRATOR"]),
         ]),
         el("p", { class: "hint" }, [
-          "Sync dziala miedzy kartami tej samej przegladarki. Na 3 telefonach otworz 3 karty / ten sam profil Chrome.",
-        ]),
-        el("p", { class: "hint" }, [
-          "Jesli widzisz stara strone z „Rozmiar planszy” — Ctrl+F5.",
+          "Admin tworzy gre i pokazuje kod. Telefony wpisuja kod. Laptop admina musi zostac otwarty (host).",
         ]),
       ])
     );
   }
 
   function renderAdmin() {
-    let g = loadGame();
+    let busy = false;
     const nick1 = el("input", {
       type: "text",
       maxlength: "16",
-      value: (g && g.players[1] && g.players[1].nick) || LABELS[1],
-      placeholder: "Gracz 1",
+      value: (game && game.players[1] && game.players[1].nick) || LABELS[1],
     });
     const nick2 = el("input", {
       type: "text",
       maxlength: "16",
-      value: (g && g.players[2] && g.players[2].nick) || LABELS[2],
-      placeholder: "Gracz 2",
+      value: (game && game.players[2] && game.players[2].nick) || LABELS[2],
     });
     const error = el("p", { class: "error hidden" });
+    const status = el("div");
+    const codeBox = el("div", { class: "room-code" });
     const summary = el("div", { class: "admin-summary" });
     const boardWrap = el("div", { class: "admin-boards" });
 
+    function showErr(msg) {
+      if (!msg) {
+        error.classList.add("hidden");
+        error.textContent = "";
+        return;
+      }
+      error.textContent = msg;
+      error.classList.remove("hidden");
+    }
+
     function paint() {
-      g = loadGame();
+      status.replaceChildren(syncBadge());
+      codeBox.replaceChildren(
+        el("div", { class: "code-big" }, [roomCode || "----"]),
+        el("p", { class: "hint" }, [
+          "Na telefonach: ten sam link + kod, albo ",
+          "#/p1/" + (roomCode || "KOD"),
+        ])
+      );
       summary.replaceChildren();
       boardWrap.replaceChildren();
-      if (!g) {
+      if (!game) {
         summary.appendChild(el("p", { class: "status-muted" }, ["Brak aktywnej gry."]));
         return;
       }
       [1, 2].forEach(function (id) {
-        const p = g.players[id];
-        const lines = countLines(p.done);
+        const p = game.players[id];
         summary.appendChild(
           el("div", { class: "sum-card p" + id }, [
             el("strong", null, [p.nick]),
-            el("span", null, [lines + " lin."]),
+            el("span", null, [countLines(p.done) + " lin."]),
             el("span", { class: "muted" }, [doneCount(p.done) + "/" + CELL_COUNT]),
           ])
         );
       });
-      if (g.winnerId) {
-        const w = g.players[g.winnerId];
+      if (game.winnerId) {
+        const w = game.players[game.winnerId];
         summary.appendChild(
           el("p", { class: "winner" }, ["Bingo! Wygrywa " + ((w && w.nick) || "gracz") + "."])
         );
       }
-
       const board = el("div", { class: "board" });
       board.style.gridTemplateColumns = "repeat(" + SIZE + ", minmax(0, 1fr))";
-      const win1 = g.winnerId === 1 ? lineCells(g.players[1].done) : {};
-      const win2 = g.winnerId === 2 ? lineCells(g.players[2].done) : {};
-
-      g.board.forEach(function (text, idx) {
-        const d1 = !!g.players[1].done[idx];
-        const d2 = !!g.players[2].done[idx];
+      const win1 = game.winnerId === 1 ? lineCells(game.players[1].done) : {};
+      const win2 = game.winnerId === 2 ? lineCells(game.players[2].done) : {};
+      game.board.forEach(function (text, idx) {
+        const d1 = !!game.players[1].done[idx];
+        const d2 = !!game.players[2].done[idx];
         const cell = el("div", { class: "cell readonly" }, [text]);
         if (d1) cell.classList.add("done-p1");
         if (d2) cell.classList.add("done-p2");
@@ -277,25 +480,43 @@
     }
 
     function startNew() {
-      error.classList.add("hidden");
+      if (busy) return;
+      showErr("");
+      busy = true;
+      const code = randomCode();
       try {
-        g = newGame({
+        game = newGame({
           1: nick1.value.trim() || LABELS[1],
           2: nick2.value.trim() || LABELS[2],
         });
-        saveGame(g);
-        paint();
       } catch (err) {
-        error.textContent = err.message || String(err);
-        error.classList.remove("hidden");
+        busy = false;
+        showErr(err.message || String(err));
+        return;
       }
+      startHost(code)
+        .then(function () {
+          broadcastState();
+          history.replaceState(null, "", "#/admin/" + code);
+          paint();
+        })
+        .catch(function (err) {
+          showErr(err.type || err.message || String(err));
+          paint();
+        })
+        .finally(function () {
+          busy = false;
+        });
     }
 
     function resetGame() {
-      if (!loadGame()) return;
-      if (!confirm("Zresetowac gre? Plansza i postepy znikna.")) return;
-      clearGame();
-      g = null;
+      if (!game && !roomCode) return;
+      if (!confirm("Zresetowac gre u wszystkich?")) return;
+      game = null;
+      broadcastState();
+      destroyPeer();
+      setRoom("");
+      history.replaceState(null, "", "#/admin");
       paint();
     }
 
@@ -310,7 +531,9 @@
           el("strong", null, ["ADMIN"]),
         ]),
         el("h1", { class: "admin-title" }, ["BINGO"]),
-        el("p", { class: "lead" }, ["Plansza zawsze 5×5 · podglad obu graczy"]),
+        el("p", { class: "lead" }, ["Laptop = host. Telefony lacza sie kodem."]),
+        status,
+        codeBox,
         el("div", { class: "admin-nicks" }, [
           el("label", { class: "field" }, [el("span", null, ["Gracz 1"]), nick1]),
           el("label", { class: "field" }, [el("span", null, ["Gracz 2"]), nick2]),
@@ -325,6 +548,18 @@
       ])
     );
     paint();
+
+    if (roomCode && syncStatus === "offline") {
+      startHost(roomCode)
+        .then(function () {
+          broadcastState();
+          paint();
+        })
+        .catch(function () {
+          paint();
+        });
+    }
+
     return paint;
   }
 
@@ -332,28 +567,26 @@
     const other = id === 1 ? 2 : 1;
     const title = el("strong", null, [LABELS[id]]);
     const linesEl = el("span", { class: "muted" }, [""]);
+    const status = el("div");
     const winner = el("p", { class: "winner hidden" });
     const empty = el("p", { class: "status-muted" }, [
-      "Brak gry. Poczekaj, az admin kliknie „Nowa gra”.",
+      "Brak gry albo brak polaczenia. Sprawdz kod i czy admin ma otwarty panel.",
     ]);
     const boardEl = el("div", { class: "board" });
     boardEl.style.gridTemplateColumns = "repeat(" + SIZE + ", minmax(0, 1fr))";
 
     function toggle(idx) {
-      const g = loadGame();
-      if (!g || g.winnerId) return;
-      const p = g.players[id];
-      if (p.done[idx]) delete p.done[idx];
-      else p.done[idx] = true;
-      if (countLines(p.done) >= 1) g.winnerId = id;
-      saveGame(g);
-      paint();
+      if (!game || game.winnerId) return;
+      if (!sendToggle(id, idx)) {
+        syncError = "Brak polaczenia z hostem";
+        paint();
+      }
     }
 
     function paint() {
-      const g = loadGame();
+      status.replaceChildren(syncBadge());
       boardEl.replaceChildren();
-      if (!g) {
+      if (!game) {
         empty.classList.remove("hidden");
         boardEl.classList.add("hidden");
         winner.classList.add("hidden");
@@ -363,24 +596,22 @@
       }
       empty.classList.add("hidden");
       boardEl.classList.remove("hidden");
-      const p = g.players[id];
-      const o = g.players[other];
+      const p = game.players[id];
+      const o = game.players[other];
       title.textContent = p.nick || LABELS[id];
       linesEl.textContent = " - " + countLines(p.done) + " lin.";
-      const winSet = g.winnerId === id ? lineCells(p.done) : {};
-
-      if (g.winnerId) {
-        const w = g.players[g.winnerId];
+      const winSet = game.winnerId === id ? lineCells(p.done) : {};
+      if (game.winnerId) {
+        const w = game.players[game.winnerId];
         winner.classList.remove("hidden");
         winner.textContent =
-          g.winnerId === id
+          game.winnerId === id
             ? "Bingo! Wygrywasz, " + w.nick + "."
             : "Bingo! Wygrywa " + w.nick + ".";
       } else {
         winner.classList.add("hidden");
       }
-
-      g.board.forEach(function (text, idx) {
+      game.board.forEach(function (text, idx) {
         const mine = !!p.done[idx];
         const theirs = !!o.done[idx];
         const cls =
@@ -392,7 +623,7 @@
           {
             type: "button",
             class: cls,
-            disabled: !!g.winnerId,
+            disabled: !!game.winnerId,
             onClick: function () { toggle(idx); },
           },
           [text]
@@ -422,12 +653,23 @@
             style: "background:" + COLORS[id],
           }, ["P" + id]),
         ]),
+        status,
         winner,
         empty,
         boardEl,
       ])
     );
     paint();
+
+    if (roomCode && syncStatus === "offline") {
+      joinHost(roomCode)
+        .then(paint)
+        .catch(function (err) {
+          syncError = err.message || String(err);
+          paint();
+        });
+    }
+
     return paint;
   }
 
@@ -435,8 +677,7 @@
     const msg = err && err.message ? err.message : String(err);
     app.innerHTML =
       '<section class="screen"><h1>BINGO</h1>' +
-      '<p class="error">Blad ladowania: ' + msg.replace(/</g, "&lt;") + "</p>" +
-      '<p class="status-muted">Sprobuj Ctrl+F5 albo innej przegladarki.</p></section>';
+      '<p class="error">Blad: ' + msg.replace(/</g, "&lt;") + "</p></section>";
   }
 
   function mount() {
@@ -444,23 +685,22 @@
     if (r.view === "admin") repaint = renderAdmin();
     else if (r.view === "player") repaint = renderPlayer(r.id);
     else {
+      destroyPeer();
       repaint = null;
       renderHome();
     }
   }
 
   window.addEventListener("hashchange", function () {
-    try { mount(); } catch (err) { showBootError(err); }
+    try {
+      mount();
+    } catch (err) {
+      showBootError(err);
+    }
   });
-  window.addEventListener("storage", function (e) {
-    if (e.key === STORE_KEY && typeof repaint === "function") repaint();
-  });
-  channel.onmessage = function () {
-    if (typeof repaint === "function") repaint();
-  };
 
   try {
-    if (!app) throw new Error("Brak #app w HTML");
+    if (!app) throw new Error("Brak #app");
     mount();
   } catch (err) {
     showBootError(err);

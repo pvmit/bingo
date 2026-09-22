@@ -1,35 +1,33 @@
 # Bingo
 
-Proste bingo 5x5 — jak Conquest: **menu rol**, osobne panele.
+Bingo 5×5 na **3 urządzenia** (admin + 2 graczy). Sync przez **PeerJS** (WebRTC) — bez Firebase / bez konta.
+
+## Jak grac
+
+1. **Laptop (admin):** otwórz [pvmit.github.io/bingo](https://pvmit.github.io/bingo/) → **ADMINISTRATOR** → **Nowa gra**.
+2. Pojawi się **kod pokoju** (np. `K7MP`). Laptop musi zostać otwarty (to host).
+3. **Telefon 1:** ten sam URL → wpisz kod → **GRACZ 1** (albo od razu `#/p1/K7MP`).
+4. **Telefon 2:** `#/p2/K7MP`.
+5. Kliknięcia synchronizują się na żywo.
 
 ## Role
 
 | Link | Rola |
 |------|------|
-| `#/` | Menu |
-| `#/admin` | Administrator — nowa gra, reset, podglad obu |
-| `#/p1` | Gracz 1 |
-| `#/p2` | Gracz 2 |
+| `#/` | Menu + pole kodu |
+| `#/admin` | Host: nowa gra, reset, podglad |
+| `#/p1/KOD` | Gracz 1 |
+| `#/p2/KOD` | Gracz 2 |
 
-Plansza zawsze **5x5**. Cele z [`goals.js`](goals.js).
-
-## Jak grac
-
-1. Laptop: **Administrator** → nicki → **Nowa gra**.
-2. Dwie karty / urzadzenia: **Gracz 1** i **Gracz 2**.
-3. Kazdy odhacza cele swoim kolorem. Pierwsza linia wygrywa.
-
-Stan w `localStorage` + BroadcastChannel (sync miedzy kartami **tej samej** przegladarki / profilu). Bez Firebase.
-
-Jesli widzisz stara strone z „Rozmiar planszy” — **Ctrl+F5**.
+Plansza zawsze **5×5**. Cele: [`goals.js`](goals.js).
 
 ## Edycja puli
 
 ```js
-// goals.js
-window.GOALS = [ "…", "…" ]; // min. 25 pozycji
+window.GOALS = [ "…", "…" ]; // min. 25
 ```
 
-## Adres
+## Uwagi
 
-https://pvmit.github.io/bingo/
+- Admin = host sieciowy; bez otwartego panelu admina telefony się nie połączą.
+- Wymaga internetu (sygnalizacja PeerJS). Telefony i laptop w dowolnych sieciach.

@@ -56,6 +56,29 @@ h1 {
   line-height: 1.4;
 }
 
+.code-input {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-weight: 800;
+  font-size: 1.2rem;
+}
+
+.room-code {
+  margin: 0 0 16px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.code-big {
+  font-size: clamp(2rem, 8vw, 3rem);
+  font-weight: 800;
+  letter-spacing: 0.25em;
+  color: var(--accent);
+}
+
 .hidden { display: none !important; }
 
 .cell.done-p1 {
