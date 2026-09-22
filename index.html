@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bingo — jedna gra</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <section id="lobby">
+    <div class="lobby-card">
+      <h1>Bingo</h1>
+      <p class="sub">Jedna wspólna plansza, sync na żywo. Cele z pliku <code>goals.js</code>.</p>
+
+      <div class="field">
+        <label for="nick">Nick</label>
+        <input id="nick" maxlength="24" placeholder="np. Luna" autocomplete="nickname" />
+      </div>
+
+      <div class="field">
+        <label for="code">Kod pokoju</label>
+        <input id="code" maxlength="6" placeholder="np. AB12" autocomplete="off" style="text-transform: uppercase" />
+      </div>
+
+      <div class="field" id="size-field">
+        <label for="size">Rozmiar planszy (nowa gra)</label>
+        <select id="size">
+          <option value="3">3×3</option>
+          <option value="4">4×4</option>
+          <option value="5" selected>5×5</option>
+          <option value="6">6×6</option>
+        </select>
+      </div>
+
+      <div class="actions">
+        <div class="actions-row">
+          <button type="button" id="btn-join">Dołącz</button>
+          <button type="button" class="primary" id="btn-new">Nowa gra</button>
+        </div>
+      </div>
+
+      <div id="lobby-msg" class="notice hidden"></div>
+    </div>
+  </section>
+
+  <section id="game" class="hidden">
+    <div id="winner-banner" class="winner-banner hidden"></div>
+    <header class="topbar">
+      <div class="brand">Bingo</div>
+      <div class="meta">
+        <span>Kod: <span class="code-pill" id="game-code">----</span></span>
+        <span>Ty: <strong id="game-nick">—</strong></span>
+        <span>Linie do wygranej: <strong>1</strong></span>
+      </div>
+      <button type="button" id="btn-leave">Wyjdź</button>
+    </header>
+    <div class="layout">
+      <aside class="players">
+        <h2>Gracze</h2>
+        <ul class="player-list" id="player-list"></ul>
+      </aside>
+      <div class="board-wrap">
+        <div class="board" id="board" role="grid"></div>
+      </div>
+    </div>
+  </section>
+
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="goals.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
