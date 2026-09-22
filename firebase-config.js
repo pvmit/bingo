@@ -1,6 +1,6 @@
 // Publiczny config Firebase (bezpieczny do commitowania).
-// Uzupełnij po utworzeniu projektu: Console → Project settings → Your apps → Web.
-// Realtime Database: utwórz bazę (np. europe-west1) i wklej databaseURL.
+// Uzupelnij po utworzeniu projektu: Console -> Project settings -> Your apps -> Web.
+// Realtime Database: utworz baze (np. europe-west1) i wklej databaseURL.
 window.FIREBASE_CONFIG = {
   apiKey: "REPLACE_ME",
   authDomain: "REPLACE_ME.firebaseapp.com",
