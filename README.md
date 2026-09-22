@@ -1,15 +1,14 @@
 # Bingo (lockout-lite)
 
-Proste bingo jak [lockout.live](https://lockout.live/), ale na **jedną grę naraz**: wspólna plansza, sync między graczami, cele z jednego pliku.
+Proste bingo jak [lockout.live](https://lockout.live/), ale na **jedną grę naraz** — czysto lokalnie, jak `conk` (bez Firebase / konta).
 
 ## Jak grać
 
-1. Uzupełnij Firebase (poniżej) i otwórz stronę.
-2. Host: wpisz nick → wybierz rozmiar → **Nowa gra** → podaj kod innym.
-3. Reszta: nick + kod → **Dołącz**.
-4. Klikaj cele, które wykonałeś. Pierwsza ukończona linia (wiersz / kolumna / przekątna) wygrywa.
-
-Wielu graczy może mieć ten sam cel (bez trybu Lockout).
+1. Otwórz stronę (Pages lub lokalnie).
+2. Wpisz graczy po przecinku, wybierz rozmiar → **Nowa gra**.
+3. Kliknij gracza na liście, żeby ustawić kto klika, potem odhaczaj cele.
+4. Pierwsza ukończona linia (wiersz / kolumna / przekątna) wygrywa.
+5. **Kopiuj link** — ten sam stan planszy można otworzyć na drugim urządzeniu (zapis w adresie URL).
 
 ## Edycja puli celów
 
@@ -23,48 +22,18 @@ window.GOALS = [
 ];
 ```
 
-Na planszę `N×N` potrzeba co najmniej `N²` unikalnych pozycji w puli (dla 5×5 → min. 25).
+Na planszę `N×N` potrzeba co najmniej `N²` pozycji (dla 5×5 → min. 25).
 
-## Firebase (wymagane do sync)
+## Lokalnie / Pages
 
-1. [Firebase Console](https://console.firebase.google.com/) → nowy projekt.
-2. **Build → Realtime Database** → Create (np. `europe-west1`).
-3. **Project settings → Your apps → Web** → skopiuj config do [`firebase-config.js`](firebase-config.js).
-4. Reguły RTDB (na start, gra drużynowa):
-
-```json
-{
-  "rules": {
-    "game": {
-      ".read": true,
-      ".write": true
-    }
-  }
-}
-```
-
-Bez uzupełnionego configu strona pokaże ostrzeżenie — sync nie ruszy.
-
-## Lokalnie
-
-Otwórz `index.html` przez lokalny serwer HTTP (Firebase / pliki ES nie wymagają, ale `file://` bywa kapryśny):
-
-```bash
-npx --yes serve .
-```
-
-## GitHub Pages
-
-1. Repo na GitHubie (np. `pvmit/bingo`).
-2. **Settings → Pages → Deploy from a branch** → `main` / `/ (root)`.
-3. Adres: `https://<user>.github.io/bingo/`
+Wystarczy otworzyć `index.html` albo:
+https://pvmit.github.io/bingo/
 
 ## Pliki
 
 | Plik | Rola |
 |------|------|
 | `goals.js` | Pula celów |
-| `firebase-config.js` | Publiczny config Firebase |
 | `index.html` | UI |
 | `style.css` | Styl |
-| `app.js` | Losowanie, sync, linie, zwycięzca |
+| `app.js` | Losowanie, linie, zwycięzca, stan w URL |

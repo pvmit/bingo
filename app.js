@@ -7,37 +7,21 @@
   const el = {
     setup: document.getElementById("setup"),
     game: document.getElementById("game"),
-    nick: document.getElementById("nick"),
     size: document.getElementById("size"),
-    code: document.getElementById("code"),
+    names: document.getElementById("names"),
     btnNew: document.getElementById("btn-new"),
-    btnJoin: document.getElementById("btn-join"),
     btnLeave: document.getElementById("btn-leave"),
+    btnCopy: document.getElementById("btn-copy"),
     setupError: document.getElementById("setup-error"),
-    firebaseWarn: document.getElementById("firebase-warn"),
     roomCode: document.getElementById("room-code"),
-    youLabel: document.getElementById("you-label"),
+    activeLabel: document.getElementById("active-label"),
     players: document.getElementById("players"),
     winner: document.getElementById("winner"),
     board: document.getElementById("board"),
   };
 
-  let db = null;
-  let gameRef = null;
-  let unsub = null;
-  let playerId = localStorage.getItem("bingoPlayerId");
-  if (!playerId) {
-    playerId = crypto.randomUUID();
-    localStorage.setItem("bingoPlayerId", playerId);
-  }
-
-  let state = {
-    nick: localStorage.getItem("bingoNick") || "",
-    code: "",
-    game: null,
-  };
-
-  el.nick.value = state.nick;
+  let state = null;
+  // { code, size, seed, board, players:[{id,nick,color,done:{} }], activeId, winnerId }
 
   function showError(msg) {
     el.setupError.hidden = !msg;
@@ -113,21 +97,15 @@
   function lineCellIndexes(done, size) {
     const marked = new Set();
     const at = (r, c) => !!done[r * size + c];
-    const markRow = (r) => {
-      for (let c = 0; c < size; c++) marked.add(r * size + c);
-    };
-    const markCol = (c) => {
-      for (let r = 0; r < size; r++) marked.add(r * size + c);
-    };
     for (let r = 0; r < size; r++) {
       let ok = true;
       for (let c = 0; c < size; c++) if (!at(r, c)) { ok = false; break; }
-      if (ok) markRow(r);
+      if (ok) for (let c = 0; c < size; c++) marked.add(r * size + c);
     }
     for (let c = 0; c < size; c++) {
       let ok = true;
       for (let r = 0; r < size; r++) if (!at(r, c)) { ok = false; break; }
-      if (ok) markCol(c);
+      if (ok) for (let r = 0; r < size; r++) marked.add(r * size + c);
     }
     let d1 = true;
     let d2 = true;
@@ -140,25 +118,75 @@
     return marked;
   }
 
-  function ensureFirebase() {
-    if (!window.FIREBASE_READY) {
-      el.firebaseWarn.classList.remove("hidden");
-      return false;
-    }
-    el.firebaseWarn.classList.add("hidden");
-    if (!db) {
-      firebase.initializeApp(window.FIREBASE_CONFIG);
-      db = firebase.database();
-    }
-    return true;
+  function parseNames(raw) {
+    return String(raw || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 8);
   }
 
-  function detach() {
-    if (typeof unsub === "function") {
-      unsub();
-      unsub = null;
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function persist() {
+    if (!state) {
+      history.replaceState(null, "", location.pathname + location.search);
+      return;
     }
-    gameRef = null;
+    const payload = {
+      c: state.code,
+      s: state.size,
+      seed: state.seed,
+      a: state.activeId,
+      w: state.winnerId,
+      p: state.players.map((p) => ({
+        id: p.id,
+        n: p.nick,
+        col: p.color,
+        d: Object.keys(p.done).filter((k) => p.done[k]).map(Number),
+      })),
+    };
+    const hash = "#g=" + encodeURIComponent(JSON.stringify(payload));
+    history.replaceState(null, "", location.pathname + location.search + hash);
+  }
+
+  function loadFromHash() {
+    const m = location.hash.match(/#g=(.+)$/);
+    if (!m) return null;
+    try {
+      const raw = JSON.parse(decodeURIComponent(m[1]));
+      const size = Number(raw.s) || 5;
+      const seed = String(raw.seed || "");
+      const board = pickBoard(size, seed);
+      const players = (raw.p || []).map((p, i) => {
+        const done = {};
+        (p.d || []).forEach((idx) => { done[idx] = true; });
+        return {
+          id: p.id || `p${i}`,
+          nick: p.n || `Gracz ${i + 1}`,
+          color: p.col || COLORS[i % COLORS.length],
+          done,
+        };
+      });
+      if (!players.length) return null;
+      return {
+        code: raw.c || randomCode(),
+        size,
+        seed,
+        board,
+        players,
+        activeId: raw.a || players[0].id,
+        winnerId: raw.w || null,
+      };
+    } catch (_) {
+      return null;
+    }
   }
 
   function showSetup() {
@@ -171,54 +199,46 @@
     el.game.classList.remove("hidden");
   }
 
-  function doneMap(player) {
-    const raw = (player && player.done) || {};
-    const map = {};
-    Object.keys(raw).forEach((k) => {
-      if (raw[k]) map[Number(k)] = true;
-    });
-    return map;
+  function activePlayer() {
+    if (!state) return null;
+    return state.players.find((p) => p.id === state.activeId) || state.players[0];
   }
 
   function render() {
-    const g = state.game;
-    if (!g || !g.board) return;
+    if (!state) return;
+    const size = state.size;
+    const me = activePlayer();
+    const myDone = (me && me.done) || {};
+    const winCells =
+      me && countLines(myDone, size) > 0 ? lineCellIndexes(myDone, size) : new Set();
+    const ended = !!state.winnerId;
 
-    const size = Number(g.size) || 5;
-    const board = g.board;
-    const players = g.players || {};
-    const me = players[playerId];
-    const myDone = doneMap(me);
-    const winCells = me && countLines(myDone, size) > 0
-      ? lineCellIndexes(myDone, size)
-      : new Set();
-    const ended = !!g.winnerId;
-
-    el.roomCode.textContent = g.code || state.code;
-    el.youLabel.textContent = me ? `· Ty: ${me.nick}` : "";
+    el.roomCode.textContent = state.code;
+    el.activeLabel.textContent = me ? `· klika: ${me.nick}` : "";
 
     el.players.innerHTML = "";
-    Object.entries(players)
-      .sort((a, b) => (a[1].joinedAt || 0) - (b[1].joinedAt || 0))
-      .forEach(([id, p]) => {
-        const done = doneMap(p);
-        const lines = countLines(done, size);
-        const li = document.createElement("li");
-        if (id === playerId) li.classList.add("me");
-        li.innerHTML =
-          `<span class="dot" style="background:${p.color || "#888"}"></span>` +
-          `<span>${escapeHtml(p.nick || "?")}</span>` +
-          `<span class="lines">${lines} lin.</span>`;
-        el.players.appendChild(li);
+    state.players.forEach((p) => {
+      const lines = countLines(p.done, size);
+      const li = document.createElement("li");
+      if (p.id === state.activeId) li.classList.add("me");
+      li.innerHTML =
+        `<span class="dot" style="background:${p.color}"></span>` +
+        `<span>${escapeHtml(p.nick)}</span>` +
+        `<span class="lines">${lines} lin.</span>`;
+      li.title = "Ustaw jako aktywnego gracza";
+      li.addEventListener("click", () => {
+        if (state.winnerId) return;
+        state.activeId = p.id;
+        persist();
+        render();
       });
+      el.players.appendChild(li);
+    });
 
-    if (g.winnerId && players[g.winnerId]) {
+    if (state.winnerId) {
+      const win = state.players.find((p) => p.id === state.winnerId);
       el.winner.classList.remove("hidden");
-      const name = players[g.winnerId].nick || "Gracz";
-      el.winner.textContent =
-        g.winnerId === playerId
-          ? `Bingo! Wygrywasz, ${name}.`
-          : `Bingo! Wygrywa ${name}.`;
+      el.winner.textContent = win ? `Bingo! Wygrywa ${win.nick}.` : "Bingo!";
     } else {
       el.winner.classList.add("hidden");
       el.winner.textContent = "";
@@ -226,139 +246,55 @@
 
     el.board.style.gridTemplateColumns = `repeat(${size}, minmax(0, 1fr))`;
     el.board.innerHTML = "";
-    board.forEach((text, idx) => {
+    state.board.forEach((text, idx) => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "cell";
       btn.textContent = text;
       if (myDone[idx]) btn.classList.add("done");
       if (winCells.has(idx)) btn.classList.add("line-win");
+
+      // Show small dots for other players who also have this cell
+      const others = state.players.filter(
+        (p) => p.id !== state.activeId && p.done[idx]
+      );
+      if (others.length) {
+        const marks = document.createElement("span");
+        marks.className = "cell-marks";
+        others.forEach((p) => {
+          const d = document.createElement("i");
+          d.style.background = p.color;
+          marks.appendChild(d);
+        });
+        btn.appendChild(marks);
+      }
+
       btn.disabled = ended;
       btn.addEventListener("click", () => toggleCell(idx));
       el.board.appendChild(btn);
     });
   }
 
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
+  function toggleCell(idx) {
+    if (!state || state.winnerId) return;
+    const me = activePlayer();
+    if (!me) return;
+    me.done[idx] = !me.done[idx];
+    if (!me.done[idx]) delete me.done[idx];
 
-  async function toggleCell(idx) {
-    const g = state.game;
-    if (!g || g.winnerId || !gameRef) return;
-    const meRef = gameRef.child(`players/${playerId}`);
-    const snap = await meRef.child(`done/${idx}`).get();
-    const next = !snap.val();
-    await meRef.child(`done/${idx}`).set(next || null);
-
-    const playerSnap = await meRef.get();
-    const player = playerSnap.val() || {};
-    const done = doneMap(player);
-    if (next) done[idx] = true;
-    else delete done[idx];
-    const size = Number(g.size) || 5;
-    const lines = countLines(done, size);
-    await meRef.child("lines").set(lines);
-
+    const lines = countLines(me.done, state.size);
     if (lines >= 1) {
-      await gameRef.transaction((cur) => {
-        if (!cur) return cur;
-        if (cur.winnerId) return;
-        cur.winnerId = playerId;
-        cur.winnerAt = Date.now();
-        return cur;
-      });
+      state.winnerId = me.id;
     }
+    persist();
+    render();
   }
 
-  function colorForPlayer(existingPlayers) {
-    const used = new Set(
-      Object.values(existingPlayers || {}).map((p) => p.color)
-    );
-    const free = COLORS.find((c) => !used.has(c));
-    return free || COLORS[Object.keys(existingPlayers || {}).length % COLORS.length];
-  }
-
-  async function joinGame(code, asHostPayload) {
-    if (!ensureFirebase()) {
-      showError("Skonfiguruj Firebase (firebase-config.js).");
-      return;
-    }
-    const nick = el.nick.value.trim();
-    if (!nick) {
-      showError("Podaj nick.");
-      return;
-    }
-    state.nick = nick;
-    localStorage.setItem("bingoNick", nick);
-    const normalized = code.trim().toUpperCase();
-    if (!/^[A-Z0-9]{4}$/.test(normalized)) {
-      showError("Kod pokoju musi mieć 4 znaki.");
-      return;
-    }
-
-    detach();
-    gameRef = db.ref("game");
-
-    if (asHostPayload) {
-      await gameRef.set(asHostPayload);
-    }
-
-    const snap = await gameRef.get();
-    const data = snap.val();
-    if (!data || data.code !== normalized) {
-      showError("Nie ma aktywnej gry z tym kodem. Utwórz nową lub sprawdź kod.");
-      detach();
-      return;
-    }
-
-    const players = data.players || {};
-    if (!players[playerId]) {
-      const color = colorForPlayer(players);
-      await gameRef.child(`players/${playerId}`).set({
-        nick,
-        color,
-        joinedAt: Date.now(),
-        lines: 0,
-        done: {},
-      });
-    } else {
-      await gameRef.child(`players/${playerId}/nick`).set(nick);
-    }
-
-    state.code = normalized;
+  function createGame() {
     showError("");
-    showGame();
-
-    const handler = (s) => {
-      state.game = s.val();
-      if (!state.game || state.game.code !== normalized) {
-        alert("Gra została zresetowana lub kod się zmienił.");
-        leaveGame();
-        return;
-      }
-      render();
-    };
-    gameRef.on("value", handler);
-    unsub = () => gameRef.off("value", handler);
-  }
-
-  async function createGame() {
-    showError("");
-    if (!ensureFirebase()) {
-      showError("Skonfiguruj Firebase (firebase-config.js).");
-      return;
-    }
-    const nick = el.nick.value.trim();
-    if (!nick) {
-      showError("Podaj nick.");
-      return;
-    }
     const size = Number(el.size.value) || 5;
+    let names = parseNames(el.names.value);
+    if (!names.length) names = ["Gracz 1"];
     const code = randomCode();
     const seed = `${code}-${Date.now()}`;
     let board;
@@ -369,42 +305,50 @@
       return;
     }
 
-    const payload = {
+    state = {
       code,
       size,
       seed,
       board,
-      createdAt: Date.now(),
+      players: names.map((nick, i) => ({
+        id: `p${i}-${code}`,
+        nick,
+        color: COLORS[i % COLORS.length],
+        done: {},
+      })),
+      activeId: null,
       winnerId: null,
-      players: {},
     };
-
-    el.btnNew.disabled = true;
-    try {
-      await joinGame(code, payload);
-      el.code.value = code;
-    } finally {
-      el.btnNew.disabled = false;
-    }
+    state.activeId = state.players[0].id;
+    persist();
+    showGame();
+    render();
   }
 
   function leaveGame() {
-    detach();
-    state.game = null;
-    state.code = "";
+    state = null;
+    persist();
     showSetup();
   }
 
-  el.btnNew.addEventListener("click", () => {
-    createGame().catch((e) => showError(e.message || String(e)));
-  });
-  el.btnJoin.addEventListener("click", () => {
-    joinGame(el.code.value).catch((e) => showError(e.message || String(e)));
-  });
-  el.btnLeave.addEventListener("click", leaveGame);
-  el.code.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") el.btnJoin.click();
-  });
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(location.href);
+      el.btnCopy.textContent = "Skopiowano";
+      setTimeout(() => { el.btnCopy.textContent = "Kopiuj link"; }, 1200);
+    } catch (_) {
+      prompt("Skopiuj link:", location.href);
+    }
+  }
 
-  ensureFirebase();
+  el.btnNew.addEventListener("click", createGame);
+  el.btnLeave.addEventListener("click", leaveGame);
+  el.btnCopy.addEventListener("click", copyLink);
+
+  const restored = loadFromHash();
+  if (restored) {
+    state = restored;
+    showGame();
+    render();
+  }
 })();

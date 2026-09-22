@@ -145,6 +145,35 @@ button:disabled {
   margin-bottom: 12px;
 }
 
+.top-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.players li {
+  cursor: pointer;
+}
+
+.cell {
+  position: relative;
+}
+
+.cell-marks {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  gap: 2px;
+}
+
+.cell-marks i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: block;
+}
+
 .topbar strong {
   font-size: 1.25rem;
   letter-spacing: 0.15em;
