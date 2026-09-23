@@ -1,23 +1,21 @@
 (() => {
   const SIZE = 5;
   const CELL_COUNT = SIZE * SIZE;
-  const COLORS = { 1: "#e23d4a", 2: "#5b8cff" };
-  const LABELS = { 1: "Gracz 1", 2: "Gracz 2" };
-  const ROOM_KEY = "bingo.room";
-  const ROLE_KEY = "bingo.role";
-  const GAME_KEY = "bingo.game";
-  const GOALS_KEY = "bingo.goals";
-  const GOALS_VER_KEY = "bingo.goalsVer";
+  const ROOM_KEY = "bingo.k.room";
+  const ROLE_KEY = "bingo.k.role";
+  const PID_KEY = "bingo.k.pid";
+  const NICK_KEY = "bingo.k.nick";
+  const GAME_KEY = "bingo.k.game";
+  const GOALS_KEY = "bingo.k.goals";
+  const GOALS_VER_KEY = "bingo.k.goalsVer";
   const GOALS_VER = "katowice-1";
 
   const app = document.getElementById("app");
   let game = null;
   let roomCode = localStorage.getItem(ROOM_KEY) || "";
-  let playerRole = (function () {
-    const raw = localStorage.getItem(ROLE_KEY);
-    if (raw === "admin") return 9;
-    return Number(raw) || 0;
-  })();
+  let role = localStorage.getItem(ROLE_KEY) || "";
+  let playerId = localStorage.getItem(PID_KEY) || "";
+  let nickDraft = localStorage.getItem(NICK_KEY) || "";
   let customGoals = null;
   let peer = null;
   let hostConn = null;
@@ -27,7 +25,11 @@
   let syncError = "";
   let reconnectTimer = null;
   let joining = false;
-  let lastResetAt = Number(localStorage.getItem("bingo.resetAt") || "0") || 0;
+
+  if (!playerId) {
+    playerId = (crypto.randomUUID && crypto.randomUUID()) || ("p" + Math.random().toString(36).slice(2, 12));
+    try { localStorage.setItem(PID_KEY, playerId); } catch (e) { /* ignore */ }
+  }
 
   try {
     const cached = localStorage.getItem(GAME_KEY);
@@ -101,19 +103,19 @@
     return h >>> 0;
   }
 
-  function pickBoard(seedStr) {
-    const pool = getGoalsPool();
-    if (pool.length < CELL_COUNT) {
-      throw new Error("Za malo pytan (potrzeba min. " + CELL_COUNT + ", masz " + pool.length + ").");
+  function pickBoard(seedStr, pool) {
+    const list = (pool || []).slice();
+    if (list.length < CELL_COUNT) {
+      throw new Error("Za malo pytan (potrzeba min. " + CELL_COUNT + ", masz " + list.length + ").");
     }
     const rand = mulberry32(hashSeed(seedStr));
-    for (let i = pool.length - 1; i > 0; i--) {
+    for (let i = list.length - 1; i > 0; i--) {
       const j = Math.floor(rand() * (i + 1));
-      const tmp = pool[i];
-      pool[i] = pool[j];
-      pool[j] = tmp;
+      const tmp = list[i];
+      list[i] = list[j];
+      list[j] = tmp;
     }
-    return pool.slice(0, CELL_COUNT);
+    return list.slice(0, CELL_COUNT);
   }
 
   function countLines(done) {
@@ -175,11 +177,42 @@
     return marked;
   }
 
-  function doneCount(done) {
-    let n = 0;
-    if (!done) return 0;
-    for (const k in done) if (done[k]) n++;
-    return n;
+  function boardDone(board, called) {
+    const done = {};
+    (board || []).forEach(function (text, idx) {
+      if (called && called[text]) done[idx] = true;
+    });
+    return done;
+  }
+
+  function playerStats(p) {
+    if (!p || !p.board) return { lines: 0, marks: 0, bingo: false, done: {} };
+    const done = boardDone(p.board, game && game.called);
+    const lines = countLines(done);
+    let marks = 0;
+    for (const k in done) if (done[k]) marks++;
+    return { lines: lines, marks: marks, bingo: lines > 0, done: done };
+  }
+
+  function playerList() {
+    if (!game || !game.players) return [];
+    return Object.keys(game.players).map(function (id) {
+      const p = game.players[id];
+      const st = playerStats(p);
+      return {
+        id: id,
+        nick: p.nick || "Gracz",
+        board: p.board,
+        lines: st.lines,
+        marks: st.marks,
+        bingo: st.bingo,
+        done: st.done,
+      };
+    }).sort(function (a, b) {
+      if (a.bingo !== b.bingo) return a.bingo ? -1 : 1;
+      if (b.lines !== a.lines) return b.lines - a.lines;
+      return String(a.nick).localeCompare(String(b.nick), "pl");
+    });
   }
 
   function randomCode() {
@@ -191,69 +224,17 @@
   }
 
   function peerIdFor(code) {
-    return "bingo-" + String(code).toUpperCase();
+    return "bingo-k-" + String(code).toUpperCase();
   }
 
-  function newGame(nicks, code) {
-    const seed =
-      "bingo-board-" +
-      String(code || "").toUpperCase() +
-      "-" +
-      Date.now() +
-      "-" +
-      Math.random().toString(36).slice(2, 8);
+  function newGame(code, pool) {
     return {
-      seed: seed,
       code: String(code || "").toUpperCase(),
-      board: pickBoard(seed),
-      owners: {},
-      players: {
-        1: { nick: nicks[1] || LABELS[1], done: {} },
-        2: { nick: nicks[2] || LABELS[2], done: {} },
-      },
-      winnerId: null,
+      pool: (pool || getGoalsPool()).slice(),
+      called: {},
+      players: {},
       updatedAt: Date.now(),
     };
-  }
-
-  /** Single owner per cell: game.owners[idx] = 1|2. Keep players.*.done in sync for line counts. */
-  function syncDoneFromOwners() {
-    if (!game || !game.players) return;
-    if (!game.owners) game.owners = {};
-    if (game.players[1]) game.players[1].done = {};
-    if (game.players[2]) game.players[2].done = {};
-    Object.keys(game.owners).forEach(function (key) {
-      const owner = Number(game.owners[key]);
-      if (owner !== 1 && owner !== 2) {
-        delete game.owners[key];
-        return;
-      }
-      if (game.players[owner]) game.players[owner].done[key] = true;
-    });
-  }
-
-  function migrateOwnersFromDone() {
-    if (!game || !game.players) return;
-    if (game.owners && typeof game.owners === "object") {
-      syncDoneFromOwners();
-      return;
-    }
-    game.owners = {};
-    for (let i = 0; i < CELL_COUNT; i++) {
-      const k = String(i);
-      const d1 = !!(game.players[1] && game.players[1].done && (game.players[1].done[i] || game.players[1].done[k]));
-      const d2 = !!(game.players[2] && game.players[2].done && (game.players[2].done[i] || game.players[2].done[k]));
-      if (d1) game.owners[k] = 1;
-      else if (d2) game.owners[k] = 2;
-    }
-    syncDoneFromOwners();
-  }
-
-  function cellOwner(idx) {
-    if (!game) return 0;
-    migrateOwnersFromDone();
-    const owner = Number(game.owners[String(idx)] || 0);
-    return owner === 1 || owner === 2 ? owner : 0;
   }
 
   function setRoom(code) {
@@ -262,11 +243,16 @@
     else localStorage.removeItem(ROOM_KEY);
   }
 
-  function setRole(role) {
-    playerRole = Number(role) || 0;
-    if (playerRole === 1 || playerRole === 2) localStorage.setItem(ROLE_KEY, String(playerRole));
-    else if (playerRole === 9) localStorage.setItem(ROLE_KEY, "admin");
+  function setRole(next) {
+    role = next || "";
+    if (role) localStorage.setItem(ROLE_KEY, role);
     else localStorage.removeItem(ROLE_KEY);
+  }
+
+  function saveNick(nick) {
+    nickDraft = String(nick || "").trim().slice(0, 20);
+    if (nickDraft) localStorage.setItem(NICK_KEY, nickDraft);
+    else localStorage.removeItem(NICK_KEY);
   }
 
   function saveGameCache() {
@@ -274,13 +260,6 @@
       if (game) localStorage.setItem(GAME_KEY, JSON.stringify(game));
       else localStorage.removeItem(GAME_KEY);
     } catch (e) { /* ignore quota */ }
-  }
-
-  function clearSession() {
-    setRoom("");
-    setRole(0);
-    game = null;
-    saveGameCache();
   }
 
   function scheduleReconnect() {
@@ -292,9 +271,7 @@
   }
 
   function openClients() {
-    return clients.filter(function (c) {
-      return c.open;
-    }).length;
+    return clients.filter(function (c) { return c.open; }).length;
   }
 
   function isHosting() {
@@ -317,86 +294,58 @@
     });
   }
 
-  function noteResetAt(at) {
-    const t = Number(at) || Date.now();
-    if (t >= lastResetAt) {
-      lastResetAt = t;
-      try {
-        localStorage.setItem("bingo.resetAt", String(lastResetAt));
-      } catch (e) { /* ignore */ }
-    }
-  }
-
   function acceptIncomingGame(incoming) {
-    // Nigdy nie kasuj lokalnej planszy pustym state (admin bez cache).
     if (incoming == null) return false;
-    if (!incoming.board || !incoming.players) return false;
-    if (lastResetAt && (incoming.updatedAt || 0) < lastResetAt) return false;
+    if (!incoming.pool || !incoming.players) return false;
     if (!game || (incoming.updatedAt || 0) >= (game.updatedAt || 0)) {
       game = incoming;
-      migrateOwnersFromDone();
+      if (!game.called) game.called = {};
+      if (!game.players) game.players = {};
       saveGameCache();
       return true;
     }
     return false;
   }
 
-  /** Clear marks on current board; keep room, board, nicks, peer. */
-  function clearGameMarks() {
-    if (!game || !game.players) return false;
-    game.owners = {};
-    if (game.players[1]) game.players[1].done = {};
-    if (game.players[2]) game.players[2].done = {};
-    game.winnerId = null;
-    game.updatedAt = Date.now();
-    noteResetAt(game.updatedAt);
-    saveGameCache();
-    return true;
-  }
-
-  /** New random board in the same room; keep nicks and peer. */
-  function reshuffleSameRoom(nicks) {
-    if (!roomCode) return false;
-    const nickMap = {
-      1: (nicks && nicks[1]) || (game && game.players[1] && game.players[1].nick) || LABELS[1],
-      2: (nicks && nicks[2]) || (game && game.players[2] && game.players[2].nick) || LABELS[2],
-    };
-    game = newGame(nickMap, roomCode);
-    noteResetAt(game.updatedAt);
-    saveGameCache();
-    return true;
-  }
-
-  function publishGameState() {
-    if (isHosting()) {
-      broadcastState();
-      return Promise.resolve();
-    }
-    if (hostConn && hostConn.open) {
-      hostConn.send({ type: "reset", at: lastResetAt, game: game });
-      return Promise.resolve();
-    }
-    if (!roomCode) return Promise.resolve();
-    return tryBecomeHost(roomCode).then(function () {
-      broadcastState();
-    });
-  }
-
-  function applyToggle(playerId, idx) {
+  function ensurePlayerBoard(pid, nick) {
     if (!game) return false;
-    if (playerId !== 1 && playerId !== 2) return false;
-    migrateOwnersFromDone();
-    const key = String(idx);
-    const owner = Number(game.owners[key] || 0);
-    if (owner === playerId) {
-      delete game.owners[key];
-    } else if (!owner) {
-      game.owners[key] = playerId;
-    } else {
-      // Zajete przez przeciwnika — bez zmian.
+    if (!game.players) game.players = {};
+    const existing = game.players[pid];
+    if (existing && existing.board && existing.board.length === CELL_COUNT) {
+      if (nick && existing.nick !== nick) {
+        existing.nick = nick;
+        game.updatedAt = Date.now();
+        saveGameCache();
+      }
       return false;
     }
-    syncDoneFromOwners();
+    const seed = "k-" + game.code + "-" + pid + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+    game.players[pid] = {
+      nick: (nick || "Gracz").slice(0, 20),
+      board: pickBoard(seed, game.pool),
+      locked: true,
+      joinedAt: Date.now(),
+    };
+    game.updatedAt = Date.now();
+    saveGameCache();
+    return true;
+  }
+
+  function applyCall(text, on) {
+    if (!game) return false;
+    if (!game.called) game.called = {};
+    const key = String(text || "");
+    if (!key) return false;
+    if (on) game.called[key] = true;
+    else delete game.called[key];
+    game.updatedAt = Date.now();
+    saveGameCache();
+    return true;
+  }
+
+  function clearCalled() {
+    if (!game) return false;
+    game.called = {};
     game.updatedAt = Date.now();
     saveGameCache();
     return true;
@@ -428,10 +377,20 @@
     });
     conn.on("data", function (msg) {
       if (!msg) return;
-      if (msg.type === "toggle") {
-        applyToggle(msg.playerId, msg.idx);
+      if (msg.type === "join") {
+        const pid = String(msg.playerId || "");
+        const nick = String(msg.nick || "Gracz").trim().slice(0, 20) || "Gracz";
+        if (!pid || !game) return;
+        ensurePlayerBoard(pid, nick);
         broadcastState();
         if (typeof repaint === "function") repaint();
+        return;
+      }
+      if (msg.type === "reset" && msg.game) {
+        if (acceptIncomingGame(msg.game)) {
+          broadcastState();
+          if (typeof repaint === "function") repaint();
+        }
         return;
       }
       if (msg.type === "admin-takeover") {
@@ -446,15 +405,6 @@
         }, 200);
         return;
       }
-      if (msg.type === "reset") {
-        if (msg.at) noteResetAt(msg.at);
-        if (msg.game && acceptIncomingGame(msg.game)) {
-          broadcastState();
-          if (typeof repaint === "function") repaint();
-        }
-        return;
-      }
-      // Przyjmij plansze od klienta tylko gdy host jej nie ma (np. po przejeciu hosta).
       if (msg.type === "state" && msg.game && !game) {
         if (acceptIncomingGame(msg.game)) {
           broadcastState();
@@ -467,6 +417,19 @@
       if (i >= 0) clients.splice(i, 1);
       updateHostStatus();
     });
+  }
+
+  function sendJoinIfPlayer() {
+    if (role !== "player" || !nickDraft || !playerId) return;
+    const payload = { type: "join", playerId: playerId, nick: nickDraft };
+    if (isHosting()) {
+      if (game) {
+        ensurePlayerBoard(playerId, nickDraft);
+        broadcastState();
+      }
+      return;
+    }
+    if (hostConn && hostConn.open) hostConn.send(payload);
   }
 
   function tryJoinAsClient(code) {
@@ -499,7 +462,7 @@
           clearTimeout(failTimer);
           syncStatus = "polaczono";
           syncError = "";
-          if (game) hostConn.send({ type: "state", game: game });
+          sendJoinIfPlayer();
           if (typeof repaint === "function") repaint();
           resolve();
         });
@@ -507,11 +470,6 @@
           if (!msg) return;
           if (msg.type === "state") {
             if (acceptIncomingGame(msg.game) && typeof repaint === "function") repaint();
-            return;
-          }
-          if (msg.type === "reset") {
-            if (msg.at) noteResetAt(msg.at);
-            if (msg.game && acceptIncomingGame(msg.game) && typeof repaint === "function") repaint();
           }
         });
         hostConn.on("close", function () {
@@ -568,6 +526,7 @@
         clearTimeout(failTimer);
         syncStatus = "host (0 pol.)";
         syncError = "";
+        sendJoinIfPlayer();
         if (typeof repaint === "function") repaint();
         resolve();
       });
@@ -604,7 +563,6 @@
           destroyPeer();
           resolve();
         };
-        // Daj czas na odebranie planszy od obecnego hosta, potem przejmij.
         const timer = setTimeout(finish, 3500);
         setTimeout(function () {
           if (!hostConn || !hostConn.open) {
@@ -618,7 +576,6 @@
     });
   }
 
-  /** Admin always prefers to be the room host when online. */
   function claimHostAsAdmin(code) {
     return tryBecomeHost(code, { strict: true }).catch(function () {
       return askHostToYield(code).then(function () {
@@ -629,12 +586,11 @@
     });
   }
 
-  /** Players: join existing host, or become host if none. Admin: always claim host. */
   function enterRoom(code) {
     const r = route();
     if (r.view === "admin") return claimHostAsAdmin(code);
     return tryJoinAsClient(code).catch(function () {
-      return tryBecomeHost(code);
+      return Promise.reject(new Error("Brak hosta. Admin musi miec otwarty panel i kliknac Nowa gra."));
     });
   }
 
@@ -659,8 +615,7 @@
     joining = true;
     enterRoom(roomCode)
       .catch(function (err) {
-        if (err && err.message === "no-host") syncError = "";
-        else syncError = err.message || String(err);
+        syncError = err.message || String(err);
         scheduleReconnect();
       })
       .finally(function () {
@@ -675,18 +630,17 @@
     if (r.view === "player" || r.view === "admin") ensureRoomConnection();
   }
 
-  function sendToggle(playerId, idx) {
+  function sendCall(text, on) {
     if (isHosting()) {
-      if (!applyToggle(playerId, idx)) return false;
+      if (!applyCall(text, on)) return false;
       broadcastState();
       return true;
     }
     if (hostConn && hostConn.open) {
-      hostConn.send({ type: "toggle", playerId: playerId, idx: idx });
+      hostConn.send({ type: "call", text: text, on: on });
       return true;
     }
-    // Solo / chwilowo bez hosta — zaznacz lokalnie, zeby UI nie stalo.
-    return applyToggle(playerId, idx);
+    return applyCall(text, on);
   }
 
   function route() {
@@ -694,18 +648,13 @@
     const parts = raw.split("/").filter(Boolean);
     if (parts[0] === "admin") {
       if (parts[1]) setRoom(parts[1]);
-      setRole(9);
+      setRole("admin");
       return { view: "admin" };
     }
-    if (parts[0] === "p1") {
+    if (parts[0] === "play") {
       if (parts[1]) setRoom(parts[1]);
-      setRole(1);
-      return { view: "player", id: 1 };
-    }
-    if (parts[0] === "p2") {
-      if (parts[1]) setRoom(parts[1]);
-      setRole(2);
-      return { view: "player", id: 2 };
+      setRole("player");
+      return { view: "player" };
     }
     return { view: "home" };
   }
@@ -714,11 +663,11 @@
     const raw = (location.hash || "#/").replace(/^#/, "") || "/";
     const parts = raw.split("/").filter(Boolean);
     if (parts.length) return false;
-    if ((playerRole === 1 || playerRole === 2) && roomCode) {
-      location.replace("#/p" + playerRole + "/" + roomCode);
+    if (role === "player" && roomCode) {
+      location.replace("#/play/" + roomCode);
       return true;
     }
-    if (playerRole === 9 && roomCode) {
+    if (role === "admin" && roomCode) {
       location.replace("#/admin/" + roomCode);
       return true;
     }
@@ -757,7 +706,7 @@
     let label = "Brak pokoju";
     if (roomCode) {
       if (syncStatus.indexOf("host") === 0) {
-        label = "Host pokoju " + roomCode + " · " + syncStatus + " (admin nie musi byc online)";
+        label = "Host pokoju " + roomCode + " · " + syncStatus + " — laptop admina musi zostac wlaczony";
       } else if (syncStatus === "polaczono") label = "Polaczono z " + roomCode;
       else if (syncStatus === "laczenie") label = "Laczenie z " + roomCode + "…";
       else label = "Pokoj " + roomCode + " · " + syncStatus;
@@ -766,7 +715,30 @@
     return el("p", { class: ok ? "status-ok" : "status-muted" }, [label]);
   }
 
+  function renderBoard(board) {
+    const wrap = el("div", { class: "board" });
+    wrap.style.gridTemplateColumns = "repeat(" + SIZE + ", minmax(0, 1fr))";
+    const called = (game && game.called) || {};
+    const done = boardDone(board, called);
+    const winSet = lineCells(done);
+    (board || []).forEach(function (text, idx) {
+      const marked = !!done[idx];
+      const cls =
+        "cell readonly" +
+        (marked ? " called" : "") +
+        (winSet[idx] ? " line-win" : "");
+      wrap.appendChild(el("div", { class: cls }, [text]));
+    });
+    return wrap;
+  }
+
   function renderHome() {
+    const nickInput = el("input", {
+      type: "text",
+      maxlength: "20",
+      placeholder: "np. Zosia",
+      value: nickDraft,
+    });
     const codeInput = el("input", {
       type: "text",
       maxlength: "4",
@@ -776,59 +748,55 @@
     });
     const kids = [
       el("h1", null, ["BINGO"]),
-      el("p", { class: "lead" }, ["3 urzadzenia · wspolna plansza 5×5"]),
+      el("p", { class: "lead" }, ["Klasyczne: wlasna plansza, admin odznacza cele."]),
     ];
-    if (roomCode && (playerRole === 1 || playerRole === 2)) {
+    if (role === "player" && roomCode && nickDraft) {
       kids.push(
         el("button", {
           class: "primary",
           type: "button",
           onClick: function () {
-            go("#/p" + playerRole + "/" + roomCode);
+            go("#/play/" + roomCode);
           },
         }, ["Wroc do gry (" + roomCode + ")"])
       );
     }
     kids.push(
       el("label", { class: "field" }, [
+        el("span", null, ["Pseudonim"]),
+        nickInput,
+      ]),
+      el("label", { class: "field" }, [
         el("span", null, ["Kod pokoju (od admina)"]),
         codeInput,
       ]),
-      el("div", { class: "role-grid" }, [
-        el("button", {
-          class: "role p1",
-          type: "button",
-          onClick: function () {
-            const c = codeInput.value.trim().toUpperCase();
-            if (c.length !== 4) {
-              alert("Wpisz 4-znakowy kod z panelu admina.");
-              return;
-            }
-            setRoom(c);
-            setRole(1);
-            go("#/p1/" + c);
-          },
-        }, ["GRACZ 1"]),
-        el("button", {
-          class: "role p2",
-          type: "button",
-          onClick: function () {
-            const c = codeInput.value.trim().toUpperCase();
-            if (c.length !== 4) {
-              alert("Wpisz 4-znakowy kod z panelu admina.");
-              return;
-            }
-            setRoom(c);
-            setRole(2);
-            go("#/p2/" + c);
-          },
-        }, ["GRACZ 2"]),
+      el("button", {
+        class: "primary join-btn",
+        type: "button",
+        onClick: function () {
+          const nick = nickInput.value.trim();
+          const c = codeInput.value.trim().toUpperCase();
+          if (!nick) {
+            alert("Wpisz pseudonim.");
+            return;
+          }
+          if (c.length !== 4) {
+            alert("Wpisz 4-znakowy kod z panelu admina.");
+            return;
+          }
+          saveNick(nick);
+          setRoom(c);
+          setRole("player");
+          go("#/play/" + c);
+        },
+      }, ["Dolacz i wylosuj plansze"]),
+      el("p", { class: "hint" }, [
+        "Plansza losuje sie raz — potem jej nie zmienisz. Pola zaznacza tylko prowadzacy.",
       ]),
       el("p", { class: "hint" }, [
-        "Wpisz kod od prowadzacego i wybierz gracza.",
-      ]),
-      el("p", { class: "hint" }, [
-        el("a", { href: "klasyczne.html" }, ["Bingo klasyczne — wlasna plansza, admin odznacza"]),
+        el("a", { href: "index.html" }, ["Bingo 2 graczy (wspolna plansza)"]),
+        " · ",
+        el("a", { href: "#/admin" }, ["Panel admina"]),
       ])
     );
     app.replaceChildren(el("section", { class: "screen home" }, kids));
@@ -836,29 +804,21 @@
 
   function renderAdmin() {
     let busy = false;
-    const nick1 = el("input", {
-      type: "text",
-      maxlength: "16",
-      value: (game && game.players[1] && game.players[1].nick) || LABELS[1],
-    });
-    const nick2 = el("input", {
-      type: "text",
-      maxlength: "16",
-      value: (game && game.players[2] && game.players[2].nick) || LABELS[2],
-    });
     const goalsArea = el("textarea", {
       class: "goals-editor",
       rows: "12",
       placeholder: "Jedno pytanie / cel w linii (min. 25)…",
     });
-    goalsArea.value = goalsToText(getGoalsPool());
+    goalsArea.value = goalsToText((game && game.pool) || getGoalsPool());
     const goalsMeta = el("p", { class: "hint goals-meta" });
     const goalsBlock = el("div", { class: "goals-block" });
     const error = el("p", { class: "error hidden" });
     const status = el("div");
     const codeBox = el("div", { class: "room-code" });
-    const summary = el("div", { class: "admin-summary" });
-    const boardWrap = el("div", { class: "admin-boards" });
+    const bingoBanner = el("div");
+    const playersWrap = el("div", { class: "admin-summary" });
+    const poolWrap = el("div", { class: "call-pool" });
+    const boardsWrap = el("div", { class: "admin-mini-boards" });
 
     function showErr(msg) {
       if (!msg) {
@@ -873,7 +833,7 @@
     function refreshGoalsMeta() {
       const n = parseGoalsText(goalsArea.value).length;
       goalsMeta.textContent =
-        n + " pytan w puli (min. " + CELL_COUNT + "). Nowa gra = nowy pokoj; Reset = nowa plansza w tym samym.";
+        n + " pytan w puli (min. " + CELL_COUNT + "). Nowa gra = nowy pokoj i nowe plansze graczy.";
     }
 
     function applyGoalsFromEditor() {
@@ -890,45 +850,68 @@
       codeBox.replaceChildren(
         el("div", { class: "code-big" }, [roomCode || "----"]),
         el("p", { class: "hint" }, [
-          "Na telefonach: ten sam link + kod, albo ",
-          "#/p1/" + (roomCode || "KOD"),
+          "Gracze: klasyczne.html → pseudonim + ten kod. Admin musi zostac online.",
         ])
       );
-      const editing = true;
-      goalsArea.disabled = false;
-      goalsBlock.classList.remove("locked");
       refreshGoalsMeta();
-      summary.replaceChildren();
-      boardWrap.replaceChildren();
+      bingoBanner.replaceChildren();
+      playersWrap.replaceChildren();
+      poolWrap.replaceChildren();
+      boardsWrap.replaceChildren();
       if (!game) {
-        summary.appendChild(
+        playersWrap.appendChild(
           el("p", { class: "status-muted" }, ["Brak aktywnej gry — ustaw pytania i kliknij Nowa gra."])
         );
         return;
       }
-      [1, 2].forEach(function (id) {
-        const p = game.players[id];
-        summary.appendChild(
-          el("div", { class: "sum-card p" + id }, [
+      const list = playerList();
+      const winners = list.filter(function (p) { return p.bingo; });
+      if (winners.length) {
+        bingoBanner.appendChild(
+          el("div", { class: "winner" }, [
+            "BINGO: " + winners.map(function (p) { return p.nick; }).join(", "),
+          ])
+        );
+      } else if (!list.length) {
+        bingoBanner.appendChild(
+          el("p", { class: "status-muted" }, ["Nikt jeszcze nie dolaczyl."])
+        );
+      } else {
+        bingoBanner.appendChild(
+          el("p", { class: "status-muted" }, ["Brak bingo."])
+        );
+      }
+      list.forEach(function (p) {
+        playersWrap.appendChild(
+          el("div", { class: "sum-card" + (p.bingo ? " bingo" : "") }, [
             el("strong", null, [p.nick]),
-            el("span", null, [countLines(p.done) + " lin."]),
-            el("span", { class: "muted" }, [doneCount(p.done) + "/" + CELL_COUNT]),
+            el("span", { class: p.bingo ? "score-lines" : "" }, [p.bingo ? "BINGO" : "brak bingo"]),
+            el("span", { class: "muted" }, [p.lines + " lin. · " + p.marks + "/" + CELL_COUNT]),
           ])
         );
       });
-      const board = el("div", { class: "board" });
-      board.style.gridTemplateColumns = "repeat(" + SIZE + ", minmax(0, 1fr))";
-      const win1 = lineCells(game.players[1].done);
-      const win2 = lineCells(game.players[2].done);
-      game.board.forEach(function (text, idx) {
-        const owner = cellOwner(idx);
-        const cell = el("div", { class: "cell readonly" }, [text]);
-        if (owner === 1) cell.classList.add("done-p1");
-        else if (owner === 2) cell.classList.add("done-p2");
-        if (win1[idx] || win2[idx]) cell.classList.add("line-win");
-        board.appendChild(cell);
+      const called = game.called || {};
+      (game.pool || []).forEach(function (text) {
+        const on = !!called[text];
+        poolWrap.appendChild(
+          el("button", {
+            type: "button",
+            class: "call-item" + (on ? " on" : ""),
+            onClick: function () {
+              sendCall(text, !on);
+              paint();
+            },
+          }, [text])
+        );
       });
-      boardWrap.appendChild(board);
+      list.forEach(function (p) {
+        boardsWrap.appendChild(
+          el("div", { class: "mini-board-card" }, [
+            el("h3", null, [p.nick + (p.bingo ? " · BINGO" : "")]),
+            renderBoard(p.board),
+          ])
+        );
+      });
     }
 
     function startNew() {
@@ -937,16 +920,8 @@
       busy = true;
       const code = randomCode();
       try {
-        applyGoalsFromEditor();
-        game = newGame(
-          {
-            1: nick1.value.trim() || LABELS[1],
-            2: nick2.value.trim() || LABELS[2],
-          },
-          code
-        );
-        game.winnerId = null;
-        noteResetAt(game.updatedAt);
+        const pool = applyGoalsFromEditor();
+        game = newGame(code, pool);
       } catch (err) {
         busy = false;
         showErr(err.message || String(err));
@@ -954,7 +929,7 @@
       }
       destroyPeer();
       setRoom(code);
-      setRole(9);
+      setRole("admin");
       saveGameCache();
       history.replaceState(null, "", "#/admin/" + code);
       paint();
@@ -972,35 +947,15 @@
         });
     }
 
-    function resetGame() {
-      if (!roomCode) {
-        showErr("Brak pokoju — najpierw Nowa gra.");
+    function resetMarks() {
+      if (!game) {
+        showErr("Brak gry — najpierw Nowa gra.");
         return;
       }
-      if (!confirm("Wylosowac nowa plansze w tym samym pokoju (" + roomCode + ")?")) return;
-      showErr("");
-      try {
-        applyGoalsFromEditor();
-        if (!reshuffleSameRoom({
-          1: nick1.value.trim() || LABELS[1],
-          2: nick2.value.trim() || LABELS[2],
-        })) {
-          showErr("Nie udalo sie wylosowac planszy.");
-          return;
-        }
-      } catch (err) {
-        showErr(err.message || String(err));
-        return;
-      }
+      if (!confirm("Wyczyscic zaznaczenia? Plansze graczy zostaja.")) return;
+      clearCalled();
       paint();
-      publishGameState()
-        .then(function () {
-          paint();
-        })
-        .catch(function (err) {
-          showErr(err.message || String(err));
-          paint();
-        });
+      if (isHosting()) broadcastState();
     }
 
     function restoreDefaultGoals() {
@@ -1031,26 +986,25 @@
             type: "button",
             onClick: function () { go("#/"); },
           }, ["← Menu"]),
-          el("strong", null, ["ADMIN"]),
+          el("strong", null, ["ADMIN · klasyczne"]),
         ]),
         el("h1", { class: "admin-title" }, ["BINGO"]),
         el("p", { class: "lead" }, [
-          "Ustaw pytania, startuj gre i rozdaj kod. Gdy admin jest online, zawsze jest hostem pokoju.",
+          "Startuj gre, rozdaj kod. Klikaj cele — zaznaczenia ida na plansze wszystkich graczy.",
         ]),
         status,
         codeBox,
         goalsBlock,
-        el("div", { class: "admin-nicks" }, [
-          el("label", { class: "field" }, [el("span", null, ["Gracz 1"]), nick1]),
-          el("label", { class: "field" }, [el("span", null, ["Gracz 2"]), nick2]),
-        ]),
         el("div", { class: "admin-actions" }, [
           el("button", { class: "primary", type: "button", onClick: startNew }, ["Nowa gra"]),
-          el("button", { class: "danger", type: "button", onClick: resetGame }, ["Reset gry"]),
+          el("button", { class: "danger", type: "button", onClick: resetMarks }, ["Wyczysc zaznaczenia"]),
         ]),
         error,
-        summary,
-        boardWrap,
+        bingoBanner,
+        playersWrap,
+        el("h2", { class: "section-title" }, ["Pula — kliknij, zeby odznaczyc"]),
+        poolWrap,
+        boardsWrap,
       ])
     );
     paint();
@@ -1062,82 +1016,42 @@
     return paint;
   }
 
-  function renderPlayer(id) {
-    const title = el("strong", null, [LABELS[id]]);
-    const linesEl = el("span", { class: "muted" }, [""]);
+  function renderPlayer() {
+    const title = el("strong", null, [nickDraft || "Gracz"]);
     const status = el("div");
-    const scoreboard = el("div", { class: "admin-summary player-score" });
+    const bingoEl = el("div");
     const empty = el("p", { class: "status-muted" }, [
-      "Laczenie z pokojem… Jesli plansza nie wraca: sprawdz kod i czy admin kliknal Nowa gra.",
+      "Czekam na plansze… Admin musi miec otwarty panel (Nowa gra) i ten sam kod.",
     ]);
-    const boardEl = el("div", { class: "board" });
-    boardEl.style.gridTemplateColumns = "repeat(" + SIZE + ", minmax(0, 1fr))";
-
-    function toggle(idx) {
-      if (!game) return;
-      const owner = cellOwner(idx);
-      if (owner && owner !== id) return;
-      if (owner === id && !confirm("Odznaczyc to pole?")) return;
-      if (!sendToggle(id, idx)) {
-        syncError = "Brak polaczenia z hostem";
-      }
-      paint();
-    }
-
-    function paintScore() {
-      scoreboard.replaceChildren();
-      if (!game) {
-        scoreboard.classList.add("hidden");
-        return;
-      }
-      scoreboard.classList.remove("hidden");
-      [1, 2].forEach(function (pid) {
-        const p = game.players[pid];
-        const card = el("div", { class: "sum-card p" + pid + (pid === id ? " me" : "") }, [
-          el("strong", null, [(p && p.nick) || LABELS[pid]]),
-          el("span", { class: "score-lines" }, [countLines(p.done) + " lin."]),
-          el("span", { class: "muted" }, [doneCount(p.done) + "/" + CELL_COUNT + " pol"]),
-        ]);
-        scoreboard.appendChild(card);
-      });
-    }
+    const boardHost = el("div");
+    const lockedNote = el("p", { class: "hint" }, [
+      "To Twoja plansza — nie da sie jej wylosowac ponownie. Pola zaznacza prowadzacy.",
+    ]);
 
     function paint() {
       status.replaceChildren(syncBadge());
-      paintScore();
-      boardEl.replaceChildren();
-      if (!game) {
+      bingoEl.replaceChildren();
+      boardHost.replaceChildren();
+      const me = game && game.players && game.players[playerId];
+      if (!me || !me.board) {
         empty.classList.remove("hidden");
-        boardEl.classList.add("hidden");
-        linesEl.textContent = "";
-        title.textContent = LABELS[id];
+        lockedNote.classList.add("hidden");
+        title.textContent = nickDraft || "Gracz";
+        if (roomConnected()) sendJoinIfPlayer();
         return;
       }
       empty.classList.add("hidden");
-      boardEl.classList.remove("hidden");
-      const p = game.players[id];
-      title.textContent = p.nick || LABELS[id];
-      linesEl.textContent = " - " + countLines(p.done) + " lin.";
-      const winSet = lineCells(p.done);
-      game.board.forEach(function (text, idx) {
-        const owner = cellOwner(idx);
-        const cls =
-          "cell" +
-          (owner === 1 ? " done-p1" : owner === 2 ? " done-p2" : "") +
-          (winSet[idx] ? " line-win" : "") +
-          (owner && owner !== id ? " locked" : "");
-        boardEl.appendChild(
-          el(
-            "button",
-            {
-              type: "button",
-              class: cls,
-              onClick: function () { toggle(idx); },
-            },
-            [text]
-          )
+      lockedNote.classList.remove("hidden");
+      title.textContent = me.nick || nickDraft || "Gracz";
+      const st = playerStats(me);
+      if (st.bingo) {
+        bingoEl.appendChild(el("div", { class: "winner" }, ["BINGO!"]));
+      } else {
+        bingoEl.appendChild(
+          el("p", { class: "status-muted" }, [st.marks + "/" + CELL_COUNT + " · " + st.lines + " lin."])
         );
-      });
+      }
+      boardHost.appendChild(renderBoard(me.board));
     }
 
     app.replaceChildren(
@@ -1148,22 +1062,21 @@
             type: "button",
             onClick: function () { go("#/"); },
           }, ["← Menu"]),
-          el("div", null, [title, linesEl]),
-          el("span", {
-            class: "badge",
-            style: "background:" + COLORS[id],
-          }, ["P" + id]),
+          el("div", null, [title]),
         ]),
         status,
-        scoreboard,
+        bingoEl,
         empty,
-        boardEl,
+        boardHost,
+        lockedNote,
       ])
     );
     paint();
 
     if (roomCode && !roomConnected()) {
       ensureRoomConnection();
+    } else {
+      sendJoinIfPlayer();
     }
 
     return paint;
@@ -1179,7 +1092,7 @@
   function mount() {
     const r = route();
     if (r.view === "admin") repaint = renderAdmin();
-    else if (r.view === "player") repaint = renderPlayer(r.id);
+    else if (r.view === "player") repaint = renderPlayer();
     else {
       destroyPeer();
       repaint = null;
