@@ -19,7 +19,9 @@ Bingo 5×5 na **3 urządzenia** (admin + 2 graczy). Sync przez **PeerJS** (WebRT
 | `#/admin/KOD` | Powrót do trwającej gry jako admin |
 | `#/p2/KOD` | Gracz 2 |
 
-Plansza zawsze **5×5**. Cele: [`goals.js`](goals.js).
+Plansza zawsze **5×5**. Cele: edycja w panelu admina przed startem (albo [`goals.js`](goals.js)).
+
+Bingo **nie kończy gry** — linie są liczone i podświetlane, ale można grać dalej.
 
 ## Edycja puli
 

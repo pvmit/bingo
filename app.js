@@ -6,6 +6,7 @@
   const ROOM_KEY = "bingo.room";
   const ROLE_KEY = "bingo.role";
   const GAME_KEY = "bingo.game";
+  const GOALS_KEY = "bingo.goals";
 
   const app = document.getElementById("app");
   let game = null;
@@ -15,6 +16,7 @@
     if (raw === "admin") return 9;
     return Number(raw) || 0;
   })();
+  let customGoals = null;
   let peer = null;
   let hostConn = null;
   const clients = [];
@@ -30,6 +32,48 @@
   } catch (e) {
     game = null;
   }
+  try {
+    const rawGoals = localStorage.getItem(GOALS_KEY);
+    if (rawGoals) {
+      const parsed = JSON.parse(rawGoals);
+      if (Array.isArray(parsed) && parsed.length) customGoals = parsed;
+    }
+  } catch (e) {
+    customGoals = null;
+  }
+
+  function defaultGoals() {
+    return Array.isArray(window.GOALS) ? window.GOALS.slice() : [];
+  }
+
+  function getGoalsPool() {
+    if (customGoals && customGoals.length) return customGoals.slice();
+    return defaultGoals();
+  }
+
+  function parseGoalsText(text) {
+    return String(text || "")
+      .split(/\r?\n/)
+      .map(function (line) { return line.trim(); })
+      .filter(Boolean);
+  }
+
+  function goalsToText(list) {
+    return (list || []).join("\n");
+  }
+
+  function saveCustomGoals(list) {
+    if (!list || !list.length) {
+      customGoals = null;
+      localStorage.removeItem(GOALS_KEY);
+      return;
+    }
+    customGoals = list.slice();
+    try {
+      localStorage.setItem(GOALS_KEY, JSON.stringify(customGoals));
+    } catch (e) { /* ignore quota */ }
+  }
+
   function mulberry32(seed) {
     let a = seed >>> 0;
     return function next() {
@@ -51,9 +95,9 @@
   }
 
   function pickBoard(seedStr) {
-    const pool = Array.isArray(window.GOALS) ? window.GOALS.slice() : [];
+    const pool = getGoalsPool();
     if (pool.length < CELL_COUNT) {
-      throw new Error("Za malo celow w goals.js (potrzeba " + CELL_COUNT + ").");
+      throw new Error("Za malo pytan (potrzeba min. " + CELL_COUNT + ", masz " + pool.length + ").");
     }
     const rand = mulberry32(hashSeed(seedStr));
     for (let i = pool.length - 1; i > 0; i--) {
@@ -234,12 +278,11 @@
   }
 
   function applyToggle(playerId, idx) {
-    if (!game || game.winnerId) return false;
+    if (!game) return false;
     const p = game.players[playerId];
     if (!p) return false;
     if (p.done[idx]) delete p.done[idx];
     else p.done[idx] = true;
-    if (countLines(p.done) >= 1) game.winnerId = playerId;
     game.updatedAt = Date.now();
     saveGameCache();
     return true;
@@ -623,6 +666,14 @@
       maxlength: "16",
       value: (game && game.players[2] && game.players[2].nick) || LABELS[2],
     });
+    const goalsArea = el("textarea", {
+      class: "goals-editor",
+      rows: "12",
+      placeholder: "Jedno pytanie / cel w linii (min. 25)…",
+    });
+    goalsArea.value = goalsToText(getGoalsPool());
+    const goalsMeta = el("p", { class: "hint goals-meta" });
+    const goalsBlock = el("div", { class: "goals-block" });
     const error = el("p", { class: "error hidden" });
     const status = el("div");
     const codeBox = el("div", { class: "room-code" });
@@ -639,6 +690,21 @@
       error.classList.remove("hidden");
     }
 
+    function refreshGoalsMeta() {
+      const n = parseGoalsText(goalsArea.value).length;
+      goalsMeta.textContent =
+        n + " pytan w puli (min. " + CELL_COUNT + " przed startem). Edycja tylko przed Nowa gra.";
+    }
+
+    function applyGoalsFromEditor() {
+      const list = parseGoalsText(goalsArea.value);
+      if (list.length < CELL_COUNT) {
+        throw new Error("Za malo pytan (potrzeba min. " + CELL_COUNT + ", masz " + list.length + ").");
+      }
+      saveCustomGoals(list);
+      return list;
+    }
+
     function paint() {
       status.replaceChildren(syncBadge());
       codeBox.replaceChildren(
@@ -648,10 +714,16 @@
           "#/p1/" + (roomCode || "KOD"),
         ])
       );
+      const editing = !game;
+      goalsArea.disabled = !editing;
+      goalsBlock.classList.toggle("locked", !editing);
+      refreshGoalsMeta();
       summary.replaceChildren();
       boardWrap.replaceChildren();
       if (!game) {
-        summary.appendChild(el("p", { class: "status-muted" }, ["Brak aktywnej gry."]));
+        summary.appendChild(
+          el("p", { class: "status-muted" }, ["Brak aktywnej gry — mozesz edytowac pytania."])
+        );
         return;
       }
       [1, 2].forEach(function (id) {
@@ -664,16 +736,10 @@
           ])
         );
       });
-      if (game.winnerId) {
-        const w = game.players[game.winnerId];
-        summary.appendChild(
-          el("p", { class: "winner" }, ["Bingo! Wygrywa " + ((w && w.nick) || "gracz") + "."])
-        );
-      }
       const board = el("div", { class: "board" });
       board.style.gridTemplateColumns = "repeat(" + SIZE + ", minmax(0, 1fr))";
-      const win1 = game.winnerId === 1 ? lineCells(game.players[1].done) : {};
-      const win2 = game.winnerId === 2 ? lineCells(game.players[2].done) : {};
+      const win1 = lineCells(game.players[1].done);
+      const win2 = lineCells(game.players[2].done);
       game.board.forEach(function (text, idx) {
         const d1 = !!game.players[1].done[idx];
         const d2 = !!game.players[2].done[idx];
@@ -692,6 +758,7 @@
       busy = true;
       const code = randomCode();
       try {
+        applyGoalsFromEditor();
         game = newGame(
           {
             1: nick1.value.trim() || LABELS[1],
@@ -699,6 +766,7 @@
           },
           code
         );
+        game.winnerId = null;
       } catch (err) {
         busy = false;
         showErr(err.message || String(err));
@@ -734,6 +802,30 @@
       paint();
     }
 
+    function restoreDefaultGoals() {
+      if (game) {
+        alert("Najpierw zresetuj gre, zeby edytowac pytania.");
+        return;
+      }
+      goalsArea.value = goalsToText(defaultGoals());
+      saveCustomGoals(null);
+      refreshGoalsMeta();
+    }
+
+    goalsArea.addEventListener("input", refreshGoalsMeta);
+    goalsBlock.replaceChildren(
+      el("label", { class: "field" }, [
+        el("span", null, ["Pytania / cele (jedno w linii)"]),
+        goalsArea,
+      ]),
+      goalsMeta,
+      el("button", {
+        class: "ghost small",
+        type: "button",
+        onClick: restoreDefaultGoals,
+      }, ["Przywroc domyslne z goals.js"])
+    );
+
     app.replaceChildren(
       el("section", { class: "screen admin" }, [
         el("div", { class: "topbar" }, [
@@ -746,10 +838,11 @@
         ]),
         el("h1", { class: "admin-title" }, ["BINGO"]),
         el("p", { class: "lead" }, [
-          "Startujesz gre i rozdajesz kod. Potem mozesz zamknac laptopa — telefony same utrzymuja sync.",
+          "Ustaw pytania, startuj gre i rozdaj kod. Potem mozesz zamknac laptopa. Bingo nie konczy gry.",
         ]),
         status,
         codeBox,
+        goalsBlock,
         el("div", { class: "admin-nicks" }, [
           el("label", { class: "field" }, [el("span", null, ["Gracz 1"]), nick1]),
           el("label", { class: "field" }, [el("span", null, ["Gracz 2"]), nick2]),
@@ -776,7 +869,6 @@
     const title = el("strong", null, [LABELS[id]]);
     const linesEl = el("span", { class: "muted" }, [""]);
     const status = el("div");
-    const winner = el("p", { class: "winner hidden" });
     const empty = el("p", { class: "status-muted" }, [
       "Brak gry albo laczenie… Wejdz po starcie u admina (wystarczy raz pobrac plansze).",
     ]);
@@ -784,7 +876,7 @@
     boardEl.style.gridTemplateColumns = "repeat(" + SIZE + ", minmax(0, 1fr))";
 
     function toggle(idx) {
-      if (!game || game.winnerId) return;
+      if (!game) return;
       if (!sendToggle(id, idx)) {
         syncError = "Brak polaczenia z hostem";
         paint();
@@ -797,7 +889,6 @@
       if (!game) {
         empty.classList.remove("hidden");
         boardEl.classList.add("hidden");
-        winner.classList.add("hidden");
         linesEl.textContent = "";
         title.textContent = LABELS[id];
         return;
@@ -807,17 +898,7 @@
       const p = game.players[id];
       title.textContent = p.nick || LABELS[id];
       linesEl.textContent = " - " + countLines(p.done) + " lin.";
-      const winSet = game.winnerId === id ? lineCells(p.done) : {};
-      if (game.winnerId) {
-        const w = game.players[game.winnerId];
-        winner.classList.remove("hidden");
-        winner.textContent =
-          game.winnerId === id
-            ? "Bingo! Wygrywasz, " + w.nick + "."
-            : "Bingo! Wygrywa " + w.nick + ".";
-      } else {
-        winner.classList.add("hidden");
-      }
+      const winSet = lineCells(p.done);
       game.board.forEach(function (text, idx) {
         const d1 = !!game.players[1].done[idx];
         const d2 = !!game.players[2].done[idx];
@@ -832,7 +913,6 @@
             {
               type: "button",
               class: cls,
-              disabled: !!game.winnerId,
               onClick: function () { toggle(idx); },
             },
             [text]
@@ -856,7 +936,6 @@
           }, ["P" + id]),
         ]),
         status,
-        winner,
         empty,
         boardEl,
       ])

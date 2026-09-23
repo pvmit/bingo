@@ -223,6 +223,37 @@ button:disabled {
   cursor: default;
 }
 
+.goals-block {
+  margin: 0 0 16px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.goals-block.locked {
+  opacity: 0.72;
+}
+
+.goals-editor {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--cell);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.goals-meta {
+  margin: 8px 0;
+}
+
 .admin-nicks {
   display: flex;
   gap: 12px;
