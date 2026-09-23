@@ -1149,12 +1149,6 @@
 
     return paint;
   }
-    if (roomCode && !roomConnected()) {
-      ensureRoomConnection();
-    }
-
-    return paint;
-  }
 
   function showBootError(err) {
     const msg = err && err.message ? err.message : String(err);
