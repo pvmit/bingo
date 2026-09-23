@@ -7,6 +7,8 @@
   const ROLE_KEY = "bingo.role";
   const GAME_KEY = "bingo.game";
   const GOALS_KEY = "bingo.goals";
+  const GOALS_VER_KEY = "bingo.goalsVer";
+  const GOALS_VER = "katowice-1";
 
   const app = document.getElementById("app");
   let game = null;
@@ -34,6 +36,10 @@
     game = null;
   }
   try {
+    if (localStorage.getItem(GOALS_VER_KEY) !== GOALS_VER) {
+      localStorage.removeItem(GOALS_KEY);
+      localStorage.setItem(GOALS_VER_KEY, GOALS_VER);
+    }
     const rawGoals = localStorage.getItem(GOALS_KEY);
     if (rawGoals) {
       const parsed = JSON.parse(rawGoals);
