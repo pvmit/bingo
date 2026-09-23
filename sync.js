@@ -5,7 +5,7 @@
 
   function loadConfig() {
     if (configPromise) return configPromise;
-    configPromise = fetch("config.json?v=29")
+    configPromise = fetch("config.json?v=30")
       .then(function (res) {
         if (!res.ok) throw new Error("Nie wczytano config.json (" + res.status + ").");
         return res.json();

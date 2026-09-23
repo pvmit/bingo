@@ -10,10 +10,11 @@
   const GOALS_VER_KEY = "bingo.k.goalsVer";
   const GOALS_VER = "katowice-1";
   const KIND = "classic";
+  const LIVE = "LIVE";
 
   const app = document.getElementById("app");
   let game = null;
-  let roomCode = localStorage.getItem(ROOM_KEY) || "";
+  let roomCode = LIVE;
   let role = localStorage.getItem(ROLE_KEY) || "";
   let playerId = localStorage.getItem(PID_KEY) || "";
   let nickDraft = localStorage.getItem(NICK_KEY) || "";
@@ -217,14 +218,6 @@
     });
   }
 
-  function randomCode() {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let out = "";
-    const bytes = crypto.getRandomValues(new Uint8Array(4));
-    for (let i = 0; i < 4; i++) out += alphabet[bytes[i] % alphabet.length];
-    return out;
-  }
-
   function newGame(code, pool) {
     return {
       code: String(code || "").toUpperCase(),
@@ -235,10 +228,9 @@
     };
   }
 
-  function setRoom(code) {
-    roomCode = String(code || "").toUpperCase();
-    if (roomCode) localStorage.setItem(ROOM_KEY, roomCode);
-    else localStorage.removeItem(ROOM_KEY);
+  function setRoom() {
+    roomCode = LIVE;
+    try { localStorage.setItem(ROOM_KEY, LIVE); } catch (e) { /* ignore */ }
   }
 
   function setRole(next) {
@@ -430,13 +422,12 @@
   function route() {
     const raw = (location.hash || "#/").replace(/^#/, "") || "/";
     const parts = raw.split("/").filter(Boolean);
+    setRoom();
     if (parts[0] === "admin") {
-      if (parts[1]) setRoom(parts[1]);
       setRole("admin");
       return { view: "admin" };
     }
     if (parts[0] === "play") {
-      if (parts[1]) setRoom(parts[1]);
       setRole("player");
       return { view: "player" };
     }
@@ -447,12 +438,12 @@
     const raw = (location.hash || "#/").replace(/^#/, "") || "/";
     const parts = raw.split("/").filter(Boolean);
     if (parts.length) return false;
-    if (role === "player" && roomCode) {
-      location.replace("#/play/" + roomCode);
+    if (role === "player") {
+      location.replace("#/play");
       return true;
     }
-    if (role === "admin" && roomCode) {
-      location.replace("#/admin/" + roomCode);
+    if (role === "admin") {
+      location.replace("#/admin");
       return true;
     }
     return false;
@@ -487,13 +478,11 @@
     if (syncError && syncError !== "no-host") {
       return el("p", { class: "error" }, ["Sync: " + syncError]);
     }
-    let label = "Brak pokoju";
-    if (roomCode) {
-      if (syncStatus === "polaczono") label = "Polaczono z pokojem " + roomCode + " (jak Conquest — bez laptopa-hosta)";
-      else if (syncStatus === "laczenie") label = "Laczenie z " + roomCode + "…";
-      else if (syncStatus === "brak gry") label = "Pokoj " + roomCode + " — czekam az admin kliknie Nowa gra";
-      else label = "Pokoj " + roomCode + " · " + syncStatus;
-    }
+    let label = "Oczekiwanie";
+    if (syncStatus === "polaczono") label = "Polaczono — gra na zywo";
+    else if (syncStatus === "laczenie") label = "Laczenie…";
+    else if (syncStatus === "brak gry") label = "Czekam az admin kliknie Nowa gra";
+    else label = syncStatus;
     const ok = syncStatus === "polaczono";
     return el("p", { class: ok ? "status-ok" : "status-muted" }, [label]);
   }
@@ -522,71 +511,44 @@
       placeholder: "np. Zosia",
       value: nickDraft,
     });
-    const codeInput = el("input", {
-      type: "text",
-      maxlength: "4",
-      placeholder: "ABCD",
-      value: roomCode,
-      class: "code-input",
-    });
     const kids = [
       el("h1", null, ["BINGO"]),
-      el("p", { class: "lead" }, ["Klasyczne: wlasna plansza, admin odznacza cele."]),
-    ];
-    if (role === "player" && roomCode && nickDraft) {
-      kids.push(
-        el("button", {
-          class: "primary",
-          type: "button",
-          onClick: function () {
-            go("#/play/" + roomCode);
-          },
-        }, ["Wroc do gry (" + roomCode + ")"])
-      );
-    }
-    kids.push(
+      el("p", { class: "lead" }, ["Wybierz role tego urzadzenia"]),
       el("label", { class: "field" }, [
-        el("span", null, ["Pseudonim"]),
+        el("span", null, ["Pseudonim (gracz)"]),
         nickInput,
       ]),
-      el("label", { class: "field" }, [
-        el("span", null, ["Kod pokoju (od admina)"]),
-        codeInput,
-      ]),
-      el("button", {
-        class: "primary join-btn",
-        type: "button",
-        onClick: function () {
-          const nick = nickInput.value.trim();
-          const c = codeInput.value.trim().toUpperCase();
-          if (!nick) {
-            alert("Wpisz pseudonim.");
-            return;
-          }
-          if (c.length !== 4) {
-            alert("Wpisz 4-znakowy kod z panelu admina.");
-            return;
-          }
-          saveNick(nick);
-          setRoom(c);
-          setRole("player");
-          go("#/play/" + c);
-        },
-      }, ["Dolacz i wylosuj plansze"]),
       el("div", { class: "role-grid" }, [
+        el("button", {
+          class: "role p1",
+          type: "button",
+          onClick: function () {
+            const nick = nickInput.value.trim();
+            if (!nick) {
+              alert("Wpisz pseudonim.");
+              return;
+            }
+            saveNick(nick);
+            setRole("player");
+            go("#/play");
+          },
+        }, ["GRACZ"]),
         el("button", {
           class: "role p2",
           type: "button",
-          onClick: function () { go("#/admin"); },
+          onClick: function () {
+            setRole("admin");
+            go("#/admin");
+          },
         }, ["ADMINISTRATOR"]),
       ]),
       el("p", { class: "hint" }, [
-        "Plansza losuje sie raz — potem jej nie zmienisz. Pola zaznacza tylko prowadzacy.",
+        "Bez kodu. Plansza losuje sie raz — pola zaznacza prowadzacy.",
       ]),
       el("p", { class: "hint" }, [
         el("a", { href: "index.html" }, ["Bingo 2 graczy (wspolna plansza)"]),
-      ])
-    );
+      ]),
+    ];
     app.replaceChildren(el("section", { class: "screen home" }, kids));
   }
 
@@ -621,7 +583,7 @@
     function refreshGoalsMeta() {
       const n = parseGoalsText(goalsArea.value).length;
       goalsMeta.textContent =
-        n + " pytan w puli (min. " + CELL_COUNT + "). Nowa gra = nowy pokoj i nowe plansze graczy.";
+        n + " pytan w puli (min. " + CELL_COUNT + "). Nowa gra = nowe plansze dla wszystkich graczy.";
     }
 
     function applyGoalsFromEditor() {
@@ -636,9 +598,8 @@
     function paint() {
       status.replaceChildren(syncBadge());
       codeBox.replaceChildren(
-        el("div", { class: "code-big" }, [roomCode || "----"]),
         el("p", { class: "hint" }, [
-          "Gracze otwieraja ten sam link na GitHubie, wpisuja kod. Admin nie musi zostawac online.",
+          "Gracze: ten sam link → pseudonim → GRACZ. Bez kodu.",
         ])
       );
       refreshGoalsMeta();
@@ -706,20 +667,19 @@
       if (busy) return;
       showErr("");
       busy = true;
-      const code = randomCode();
       try {
         const pool = applyGoalsFromEditor();
-        game = newGame(code, pool);
+        game = newGame(LIVE, pool);
       } catch (err) {
         busy = false;
         showErr(err.message || String(err));
         return;
       }
       stopSync();
-      setRoom(code);
+      setRoom();
       setRole("admin");
       saveGameCache();
-      history.replaceState(null, "", "#/admin/" + code);
+      history.replaceState(null, "", "#/admin");
       paint();
       publishState()
         .then(function () {
@@ -779,7 +739,7 @@
         ]),
         el("h1", { class: "admin-title" }, ["BINGO"]),
         el("p", { class: "lead" }, [
-          "Startuj gre, rozdaj kod. Telefony otwieraja GitHub — jak Conquest. Laptop mozesz zamknac.",
+          "Startuj gre. Telefony: ten sam link, pseudonim, GRACZ.",
         ]),
         status,
         codeBox,
@@ -810,7 +770,7 @@
     const status = el("div");
     const bingoEl = el("div");
     const empty = el("p", { class: "status-muted" }, [
-      "Czekam na plansze… Admin klika Nowa gra na GitHubie i podaje kod.",
+      "Czekam na plansze… Admin klika Nowa gra na tym samym linku.",
     ]);
     const boardHost = el("div");
     const lockedNote = el("p", { class: "hint" }, [

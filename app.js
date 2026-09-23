@@ -10,10 +10,11 @@
   const GOALS_VER_KEY = "bingo.goalsVer";
   const GOALS_VER = "katowice-1";
   const KIND = "duo";
+  const LIVE = "LIVE";
 
   const app = document.getElementById("app");
   let game = null;
-  let roomCode = localStorage.getItem(ROOM_KEY) || "";
+  let roomCode = LIVE;
   let playerRole = (function () {
     const raw = localStorage.getItem(ROLE_KEY);
     if (raw === "admin") return 9;
@@ -183,14 +184,6 @@
     return n;
   }
 
-  function randomCode() {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let out = "";
-    const bytes = crypto.getRandomValues(new Uint8Array(4));
-    for (let i = 0; i < 4; i++) out += alphabet[bytes[i] % alphabet.length];
-    return out;
-  }
-
   function newGame(nicks, code) {
     const seed =
       "bingo-board-" +
@@ -253,10 +246,9 @@
     return owner === 1 || owner === 2 ? owner : 0;
   }
 
-  function setRoom(code) {
-    roomCode = String(code || "").toUpperCase();
-    if (roomCode) localStorage.setItem(ROOM_KEY, roomCode);
-    else localStorage.removeItem(ROOM_KEY);
+  function setRoom() {
+    roomCode = LIVE;
+    try { localStorage.setItem(ROOM_KEY, LIVE); } catch (e) { /* ignore */ }
   }
 
   function setRole(role) {
@@ -445,18 +437,16 @@
   function route() {
     const raw = (location.hash || "#/").replace(/^#/, "") || "/";
     const parts = raw.split("/").filter(Boolean);
+    setRoom();
     if (parts[0] === "admin") {
-      if (parts[1]) setRoom(parts[1]);
       setRole(9);
       return { view: "admin" };
     }
     if (parts[0] === "p1") {
-      if (parts[1]) setRoom(parts[1]);
       setRole(1);
       return { view: "player", id: 1 };
     }
     if (parts[0] === "p2") {
-      if (parts[1]) setRoom(parts[1]);
       setRole(2);
       return { view: "player", id: 2 };
     }
@@ -467,12 +457,12 @@
     const raw = (location.hash || "#/").replace(/^#/, "") || "/";
     const parts = raw.split("/").filter(Boolean);
     if (parts.length) return false;
-    if ((playerRole === 1 || playerRole === 2) && roomCode) {
-      location.replace("#/p" + playerRole + "/" + roomCode);
+    if (playerRole === 1 || playerRole === 2) {
+      location.replace("#/p" + playerRole);
       return true;
     }
-    if (playerRole === 9 && roomCode) {
-      location.replace("#/admin/" + roomCode);
+    if (playerRole === 9) {
+      location.replace("#/admin");
       return true;
     }
     return false;
@@ -507,72 +497,34 @@
     if (syncError && syncError !== "no-host") {
       return el("p", { class: "error" }, ["Sync: " + syncError]);
     }
-    let label = "Brak pokoju";
-    if (roomCode) {
-      if (syncStatus === "polaczono") label = "Polaczono z pokojem " + roomCode + " (jak Conquest)";
-      else if (syncStatus === "laczenie") label = "Laczenie z " + roomCode + "…";
-      else if (syncStatus === "brak gry") label = "Pokoj " + roomCode + " — czekam az admin kliknie Nowa gra";
-      else label = "Pokoj " + roomCode + " · " + syncStatus;
-    }
+    let label = "Oczekiwanie";
+    if (syncStatus === "polaczono") label = "Polaczono — gra na zywo";
+    else if (syncStatus === "laczenie") label = "Laczenie…";
+    else if (syncStatus === "brak gry") label = "Czekam az admin kliknie Nowa gra";
+    else label = syncStatus;
     const ok = syncStatus === "polaczono";
     return el("p", { class: ok ? "status-ok" : "status-muted" }, [label]);
   }
 
   function renderHome() {
-    const codeInput = el("input", {
-      type: "text",
-      maxlength: "4",
-      placeholder: "ABCD",
-      value: roomCode,
-      class: "code-input",
-    });
     const kids = [
       el("h1", null, ["BINGO"]),
-      el("p", { class: "lead" }, ["3 urzadzenia · wspolna plansza 5×5"]),
-    ];
-    if (roomCode && (playerRole === 1 || playerRole === 2)) {
-      kids.push(
-        el("button", {
-          class: "primary",
-          type: "button",
-          onClick: function () {
-            go("#/p" + playerRole + "/" + roomCode);
-          },
-        }, ["Wroc do gry (" + roomCode + ")"])
-      );
-    }
-    kids.push(
-      el("label", { class: "field" }, [
-        el("span", null, ["Kod pokoju (od admina)"]),
-        codeInput,
-      ]),
+      el("p", { class: "lead" }, ["Wybierz role tego urzadzenia"]),
       el("div", { class: "role-grid" }, [
         el("button", {
           class: "role p1",
           type: "button",
           onClick: function () {
-            const c = codeInput.value.trim().toUpperCase();
-            if (c.length !== 4) {
-              alert("Wpisz 4-znakowy kod z panelu admina.");
-              return;
-            }
-            setRoom(c);
             setRole(1);
-            go("#/p1/" + c);
+            go("#/p1");
           },
         }, ["GRACZ 1"]),
         el("button", {
           class: "role p2",
           type: "button",
           onClick: function () {
-            const c = codeInput.value.trim().toUpperCase();
-            if (c.length !== 4) {
-              alert("Wpisz 4-znakowy kod z panelu admina.");
-              return;
-            }
-            setRoom(c);
             setRole(2);
-            go("#/p2/" + c);
+            go("#/p2");
           },
         }, ["GRACZ 2"]),
       ]),
@@ -580,16 +532,19 @@
         el("button", {
           class: "role",
           type: "button",
-          onClick: function () { go("#/admin"); },
+          onClick: function () {
+            setRole(9);
+            go("#/admin");
+          },
         }, ["ADMINISTRATOR"]),
       ]),
       el("p", { class: "hint" }, [
-        "Wpisz kod od prowadzacego i wybierz gracza.",
+        "Bez kodu — wszyscy sa w jednej grze, jak w Conquest.",
       ]),
       el("p", { class: "hint" }, [
         el("a", { href: "klasyczne.html" }, ["Bingo klasyczne — wlasna plansza, admin odznacza"]),
-      ])
-    );
+      ]),
+    ];
     app.replaceChildren(el("section", { class: "screen home" }, kids));
   }
 
@@ -632,7 +587,7 @@
     function refreshGoalsMeta() {
       const n = parseGoalsText(goalsArea.value).length;
       goalsMeta.textContent =
-        n + " pytan w puli (min. " + CELL_COUNT + "). Nowa gra = nowy pokoj; Reset = nowa plansza w tym samym.";
+        n + " pytan w puli (min. " + CELL_COUNT + "). Nowa gra / Reset wylosuje plansze dla wszystkich.";
     }
 
     function applyGoalsFromEditor() {
@@ -647,9 +602,8 @@
     function paint() {
       status.replaceChildren(syncBadge());
       codeBox.replaceChildren(
-        el("div", { class: "code-big" }, [roomCode || "----"]),
         el("p", { class: "hint" }, [
-          "Na telefonach: ten sam link GitHub + kod. Laptop nie musi zostawac wlaczony.",
+          "Telefony: ten sam link → GRACZ 1 / GRACZ 2. Bez kodu.",
         ])
       );
       const editing = true;
@@ -693,7 +647,6 @@
       if (busy) return;
       showErr("");
       busy = true;
-      const code = randomCode();
       try {
         applyGoalsFromEditor();
         game = newGame(
@@ -701,7 +654,7 @@
             1: nick1.value.trim() || LABELS[1],
             2: nick2.value.trim() || LABELS[2],
           },
-          code
+          LIVE
         );
         game.winnerId = null;
         noteResetAt(game.updatedAt);
@@ -711,10 +664,10 @@
         return;
       }
       stopSync();
-      setRoom(code);
+      setRoom();
       setRole(9);
       saveGameCache();
-      history.replaceState(null, "", "#/admin/" + code);
+      history.replaceState(null, "", "#/admin");
       paint();
       publishState()
         .then(function () {
@@ -736,7 +689,7 @@
         showErr("Brak pokoju — najpierw Nowa gra.");
         return;
       }
-      if (!confirm("Wylosowac nowa plansze w tym samym pokoju (" + roomCode + ")?")) return;
+      if (!confirm("Wylosowac nowa plansze dla wszystkich?")) return;
       showErr("");
       try {
         applyGoalsFromEditor();
@@ -794,7 +747,7 @@
         ]),
         el("h1", { class: "admin-title" }, ["BINGO"]),
         el("p", { class: "lead" }, [
-          "Ustaw pytania, startuj gre i rozdaj kod. Telefony graja z GitHuba — laptop mozesz zamknac.",
+          "Ustaw pytania i startuj gre. Telefony tylko wybieraja GRACZ 1 / GRACZ 2.",
         ]),
         status,
         codeBox,
@@ -827,7 +780,7 @@
     const status = el("div");
     const scoreboard = el("div", { class: "admin-summary player-score" });
     const empty = el("p", { class: "status-muted" }, [
-      "Laczenie z pokojem… Jesli plansza nie wraca: sprawdz kod i czy admin kliknal Nowa gra.",
+      "Czekam na gre… Admin klika Nowa gra na tym samym linku.",
     ]);
     const boardEl = el("div", { class: "board" });
     boardEl.style.gridTemplateColumns = "repeat(" + SIZE + ", minmax(0, 1fr))";
