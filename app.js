@@ -25,6 +25,7 @@
   let syncError = "";
   let reconnectTimer = null;
   let joining = false;
+  let lastResetAt = Number(localStorage.getItem("bingo.resetAt") || "0") || 0;
 
   try {
     const cached = localStorage.getItem(GAME_KEY);
@@ -262,6 +263,16 @@
     });
   }
 
+  function noteResetAt(at) {
+    const t = Number(at) || Date.now();
+    if (t >= lastResetAt) {
+      lastResetAt = t;
+      try {
+        localStorage.setItem("bingo.resetAt", String(lastResetAt));
+      } catch (e) { /* ignore */ }
+    }
+  }
+
   function acceptIncomingGame(incoming) {
     if (incoming == null) {
       if (game == null) return false;
@@ -269,12 +280,40 @@
       saveGameCache();
       return true;
     }
+    if (lastResetAt && (incoming.updatedAt || 0) < lastResetAt) return false;
     if (!game || (incoming.updatedAt || 0) >= (game.updatedAt || 0)) {
       game = incoming;
       saveGameCache();
       return true;
     }
     return false;
+  }
+
+  /** Clear marks on current board; keep room, board, nicks, peer. */
+  function clearGameMarks() {
+    if (!game || !game.players) return false;
+    if (game.players[1]) game.players[1].done = {};
+    if (game.players[2]) game.players[2].done = {};
+    game.winnerId = null;
+    game.updatedAt = Date.now();
+    noteResetAt(game.updatedAt);
+    saveGameCache();
+    return true;
+  }
+
+  function publishGameState() {
+    if (isHosting()) {
+      broadcastState();
+      return Promise.resolve();
+    }
+    if (hostConn && hostConn.open) {
+      hostConn.send({ type: "reset", at: lastResetAt, game: game });
+      return Promise.resolve();
+    }
+    if (!roomCode) return Promise.resolve();
+    return tryBecomeHost(roomCode).then(function () {
+      broadcastState();
+    });
   }
 
   function applyToggle(playerId, idx) {
@@ -316,6 +355,14 @@
       if (!msg) return;
       if (msg.type === "toggle") {
         if (applyToggle(msg.playerId, msg.idx)) {
+          broadcastState();
+          if (typeof repaint === "function") repaint();
+        }
+        return;
+      }
+      if (msg.type === "reset") {
+        if (msg.at) noteResetAt(msg.at);
+        if (acceptIncomingGame(msg.game)) {
           broadcastState();
           if (typeof repaint === "function") repaint();
         }
@@ -769,21 +816,22 @@
     }
 
     function resetGame() {
-      if (!game && !roomCode) return;
-      if (!confirm("Zresetowac gre u wszystkich? Kod pokoju zostanie ten sam.")) return;
-      const kept = roomCode;
-      game = null;
-      saveGameCache();
-      broadcastState();
-      setRole(9);
-      if (kept) {
-        setRoom(kept);
-        history.replaceState(null, "", "#/admin/" + kept);
-      } else {
-        history.replaceState(null, "", "#/admin");
+      if (!game) {
+        showErr("Brak aktywnej gry do zresetowania.");
+        return;
       }
+      if (!confirm("Wyczyscic zaznaczenia u wszystkich? Kod pokoju i plansza zostaja.")) return;
+      showErr("");
+      if (!clearGameMarks()) return;
       paint();
-      if (kept && !roomConnected()) ensureRoomConnection();
+      publishGameState()
+        .then(function () {
+          paint();
+        })
+        .catch(function (err) {
+          showErr(err.message || String(err));
+          paint();
+        });
     }
 
     function restoreDefaultGoals() {
