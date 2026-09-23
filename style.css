@@ -82,15 +82,20 @@ h1 {
 .hidden { display: none !important; }
 
 .cell.done-p1 {
-  background: color-mix(in srgb, var(--p1) 55%, var(--cell));
+  background: var(--p1);
   border-color: var(--p1);
   color: #fff;
 }
 
 .cell.done-p2 {
-  background: color-mix(in srgb, var(--p2) 55%, var(--cell));
+  background: var(--p2);
   border-color: var(--p2);
   color: #fff;
+}
+
+.cell.done-p1.done-p2 {
+  background: var(--p1);
+  border-color: var(--p1);
 }
 
 .cell.line-win {

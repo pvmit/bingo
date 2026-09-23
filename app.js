@@ -295,6 +295,7 @@
     if (lastResetAt && (incoming.updatedAt || 0) < lastResetAt) return false;
     if (!game || (incoming.updatedAt || 0) >= (game.updatedAt || 0)) {
       game = incoming;
+      enforceOneOwnerPerCell();
       saveGameCache();
       return true;
     }
@@ -351,11 +352,30 @@
       delete p.done[idx];
     } else {
       p.done[idx] = true;
-      if (other && other.done[idx]) delete other.done[idx];
+      if (other) delete other.done[idx];
     }
+    enforceOneOwnerPerCell();
     game.updatedAt = Date.now();
     saveGameCache();
     return true;
+  }
+
+  /** Never allow both players to own the same cell (legacy / race). */
+  function enforceOneOwnerPerCell() {
+    if (!game || !game.players) return;
+    const p1 = game.players[1];
+    const p2 = game.players[2];
+    if (!p1 || !p2) return;
+    for (let i = 0; i < CELL_COUNT; i++) {
+      if (p1.done[i] && p2.done[i]) delete p2.done[i];
+    }
+  }
+
+  function cellOwner(idx) {
+    if (!game || !game.players) return 0;
+    if (game.players[1] && game.players[1].done[idx]) return 1;
+    if (game.players[2] && game.players[2].done[idx]) return 2;
+    return 0;
   }
 
   function updateHostStatus() {
@@ -855,11 +875,10 @@
       const win1 = lineCells(game.players[1].done);
       const win2 = lineCells(game.players[2].done);
       game.board.forEach(function (text, idx) {
-        const d1 = !!game.players[1].done[idx];
-        const d2 = !!game.players[2].done[idx];
+        const owner = cellOwner(idx);
         const cell = el("div", { class: "cell readonly" }, [text]);
-        if (d1) cell.classList.add("done-p1");
-        else if (d2) cell.classList.add("done-p2");
+        if (owner === 1) cell.classList.add("done-p1");
+        else if (owner === 2) cell.classList.add("done-p2");
         if (win1[idx] || win2[idx]) cell.classList.add("line-win");
         board.appendChild(cell);
       });
@@ -1034,11 +1053,10 @@
       linesEl.textContent = " - " + countLines(p.done) + " lin.";
       const winSet = lineCells(p.done);
       game.board.forEach(function (text, idx) {
-        const d1 = !!game.players[1].done[idx];
-        const d2 = !!game.players[2].done[idx];
+        const owner = cellOwner(idx);
         const cls =
           "cell" +
-          (d1 ? " done-p1" : d2 ? " done-p2" : "") +
+          (owner === 1 ? " done-p1" : owner === 2 ? " done-p2" : "") +
           (winSet[idx] ? " line-win" : "");
         boardEl.appendChild(
           el(
