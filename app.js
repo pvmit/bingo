@@ -587,17 +587,6 @@
         }, ["Wroc do gry (" + roomCode + ")"])
       );
     }
-    if (roomCode && playerRole === 9) {
-      kids.push(
-        el("button", {
-          class: "primary",
-          type: "button",
-          onClick: function () {
-            go("#/admin/" + roomCode);
-          },
-        }, ["Wroc do panelu admina (" + roomCode + ")"])
-      );
-    }
     kids.push(
       el("label", { class: "field" }, [
         el("span", null, ["Kod pokoju (od admina)"]),
@@ -633,22 +622,8 @@
           },
         }, ["GRACZ 2"]),
       ]),
-      el("button", {
-        class: "ghost admin-entry",
-        type: "button",
-        onClick: function () {
-          const c = (codeInput.value.trim() || roomCode || "").toUpperCase();
-          setRole(9);
-          if (c.length === 4) {
-            setRoom(c);
-            go("#/admin/" + c);
-          } else {
-            go("#/admin");
-          }
-        },
-      }, [roomCode ? "Panel admina (" + roomCode + ")" : "Panel admina"]),
       el("p", { class: "hint" }, [
-        "Gracze: wpisz kod i wybierz role. Admin: przycisk powyzej albo #/admin.",
+        "Wpisz kod od prowadzacego i wybierz gracza.",
       ])
     );
     app.replaceChildren(el("section", { class: "screen home" }, kids));

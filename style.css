@@ -208,11 +208,6 @@ button.ghost {
   background: var(--panel);
 }
 
-button.admin-entry {
-  width: 100%;
-  margin-top: 16px;
-}
-
 button.small {
   padding: 6px 10px;
   font-size: 0.85rem;

@@ -14,8 +14,8 @@ Bingo 5×5 na **3 urządzenia** (admin + 2 graczy). Sync przez **PeerJS** (WebRT
 
 | Link | Rola |
 |------|------|
-| `#/` | Menu graczy + kod + **Panel admina** |
-| `#/admin` | Start / podgląd |
+| `#/` | Menu graczy + kod |
+| `#/admin` | Start / podgląd (tylko adresem) |
 | `#/admin/KOD` | Powrót do trwającej gry jako admin |
 | `#/p2/KOD` | Gracz 2 |
 
