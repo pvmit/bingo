@@ -9,6 +9,7 @@
   const GOALS_KEY = "bingo.k.goals";
   const GOALS_VER_KEY = "bingo.k.goalsVer";
   const GOALS_VER = "katowice-1";
+  const KIND = "classic";
 
   const app = document.getElementById("app");
   let game = null;
@@ -17,9 +18,10 @@
   let playerId = localStorage.getItem(PID_KEY) || "";
   let nickDraft = localStorage.getItem(NICK_KEY) || "";
   let customGoals = null;
-  let peer = null;
-  let hostConn = null;
-  const clients = [];
+  let watchStop = null;
+  let watchingCode = "";
+  let joiningPlayer = false;
+  let emptyPublish = false;
   let repaint = null;
   let syncStatus = "offline";
   let syncError = "";
@@ -223,10 +225,6 @@
     return out;
   }
 
-  function peerIdFor(code) {
-    return "bingo-k-" + String(code).toUpperCase();
-  }
-
   function newGame(code, pool) {
     return {
       code: String(code || "").toUpperCase(),
@@ -270,27 +268,15 @@
     }, 1500);
   }
 
-  function openClients() {
-    return clients.filter(function (c) { return c.open; }).length;
-  }
-
-  function isHosting() {
-    return !!(peer && !peer.destroyed && !hostConn && String(syncStatus).indexOf("host") === 0);
-  }
-
-  function isClientConnected() {
-    return !!(hostConn && hostConn.open && syncStatus === "polaczono");
-  }
-
   function roomConnected() {
-    return isHosting() || isClientConnected();
+    return syncStatus === "polaczono";
   }
 
-  function broadcastState() {
-    if (!game) return;
-    const payload = { type: "state", game: game };
-    clients.forEach(function (c) {
-      if (c.open) c.send(payload);
+  function publishState() {
+    if (!game || !roomCode || typeof BingoCloud === "undefined") return Promise.resolve();
+    return BingoCloud.save(roomCode, KIND, game).catch(function (err) {
+      syncError = err.message || String(err);
+      if (typeof repaint === "function") repaint();
     });
   }
 
@@ -351,277 +337,82 @@
     return true;
   }
 
-  function updateHostStatus() {
-    syncStatus = "host (" + openClients() + " pol.)";
-    if (typeof repaint === "function") repaint();
-  }
-
-  function destroyPeer() {
-    while (clients.length) clients.pop();
-    if (hostConn) {
-      try { hostConn.close(); } catch (e) { /* ignore */ }
-      hostConn = null;
+  function stopSync() {
+    if (watchStop) {
+      watchStop();
+      watchStop = null;
     }
-    if (peer) {
-      try { peer.destroy(); } catch (e) { /* ignore */ }
-      peer = null;
-    }
+    watchingCode = "";
+    joining = false;
+    joiningPlayer = false;
     syncStatus = "offline";
   }
 
-  function wireHostConnection(conn) {
-    clients.push(conn);
-    conn.on("open", function () {
-      if (game) conn.send({ type: "state", game: game });
-      updateHostStatus();
-    });
-    conn.on("data", function (msg) {
-      if (!msg) return;
-      if (msg.type === "join") {
-        const pid = String(msg.playerId || "");
-        const nick = String(msg.nick || "Gracz").trim().slice(0, 20) || "Gracz";
-        if (!pid || !game) return;
-        ensurePlayerBoard(pid, nick);
-        broadcastState();
-        if (typeof repaint === "function") repaint();
-        return;
-      }
-      if (msg.type === "reset" && msg.game) {
-        if (acceptIncomingGame(msg.game)) {
-          broadcastState();
-          if (typeof repaint === "function") repaint();
-        }
-        return;
-      }
-      if (msg.type === "admin-takeover") {
-        if (game) {
-          try { conn.send({ type: "state", game: game }); } catch (e) { /* ignore */ }
-        }
-        setTimeout(function () {
-          destroyPeer();
-          syncStatus = "rozlaczono";
-          if (typeof repaint === "function") repaint();
-          scheduleReconnect();
-        }, 200);
-        return;
-      }
-      if (msg.type === "state" && msg.game && !game) {
-        if (acceptIncomingGame(msg.game)) {
-          broadcastState();
-          if (typeof repaint === "function") repaint();
-        }
-      }
-    });
-    conn.on("close", function () {
-      const i = clients.indexOf(conn);
-      if (i >= 0) clients.splice(i, 1);
-      updateHostStatus();
-    });
-  }
-
-  function sendJoinIfPlayer() {
-    if (role !== "player" || !nickDraft || !playerId) return;
-    const payload = { type: "join", playerId: playerId, nick: nickDraft };
-    if (isHosting()) {
-      if (game) {
+  function maybeJoinPlayer() {
+    if (role !== "player" || !nickDraft || !playerId || joiningPlayer) return;
+    if (game && game.players && game.players[playerId] && game.players[playerId].board) return;
+    joiningPlayer = true;
+    BingoCloud.get(roomCode, KIND)
+      .then(function (remote) {
+        if (remote) acceptIncomingGame(remote);
+        if (!game) return;
+        if (game.players && game.players[playerId] && game.players[playerId].board) return;
         ensurePlayerBoard(playerId, nickDraft);
-        broadcastState();
-      }
-      return;
-    }
-    if (hostConn && hostConn.open) hostConn.send(payload);
-  }
-
-  function tryJoinAsClient(code) {
-    return new Promise(function (resolve, reject) {
-      destroyPeer();
-      setRoom(code);
-      if (typeof Peer === "undefined") {
-        reject(new Error("PeerJS nie zaladowany — sprawdz internet / CDN."));
-        return;
-      }
-      syncStatus = "laczenie";
-      syncError = "";
-      let settled = false;
-      const failTimer = setTimeout(function () {
-        if (settled) return;
-        settled = true;
-        try { if (peer) peer.destroy(); } catch (e) { /* ignore */ }
-        peer = null;
-        hostConn = null;
-        syncStatus = "offline";
-        reject(new Error("no-host"));
-      }, 4500);
-
-      peer = new Peer({ debug: 0 });
-      peer.on("open", function () {
-        hostConn = peer.connect(peerIdFor(code), { reliable: true });
-        hostConn.on("open", function () {
-          if (settled) return;
-          settled = true;
-          clearTimeout(failTimer);
-          syncStatus = "polaczono";
-          syncError = "";
-          sendJoinIfPlayer();
-          if (typeof repaint === "function") repaint();
-          resolve();
-        });
-        hostConn.on("data", function (msg) {
-          if (!msg) return;
-          if (msg.type === "state") {
-            if (acceptIncomingGame(msg.game) && typeof repaint === "function") repaint();
-          }
-        });
-        hostConn.on("close", function () {
-          syncStatus = "rozlaczono";
-          if (typeof repaint === "function") repaint();
-          scheduleReconnect();
-        });
-        hostConn.on("error", function (err) {
-          if (!settled) {
-            settled = true;
-            clearTimeout(failTimer);
-            reject(err);
-            return;
-          }
-          syncError = err.message || String(err);
-          syncStatus = "blad";
-          if (typeof repaint === "function") repaint();
-          scheduleReconnect();
-        });
-      });
-      peer.on("error", function (err) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(failTimer);
-        reject(err);
-      });
-    });
-  }
-
-  function tryBecomeHost(code, opts) {
-    const allowClientFallback = !(opts && opts.strict);
-    return new Promise(function (resolve, reject) {
-      destroyPeer();
-      setRoom(code);
-      if (typeof Peer === "undefined") {
-        reject(new Error("PeerJS nie zaladowany — sprawdz internet / CDN."));
-        return;
-      }
-      syncStatus = "laczenie";
-      syncError = "";
-      let settled = false;
-      const failTimer = setTimeout(function () {
-        if (settled) return;
-        settled = true;
-        syncError = "Timeout PeerJS — sprobuj ponownie";
-        syncStatus = "blad";
-        reject(new Error(syncError));
-      }, 10000);
-
-      peer = new Peer(peerIdFor(code), { debug: 0 });
-      peer.on("open", function () {
-        if (settled) return;
-        settled = true;
-        clearTimeout(failTimer);
-        syncStatus = "host (0 pol.)";
-        syncError = "";
-        sendJoinIfPlayer();
+        return BingoCloud.save(roomCode, KIND, game);
+      })
+      .catch(function (err) {
+        syncError = err.message || String(err);
+      })
+      .finally(function () {
+        joiningPlayer = false;
         if (typeof repaint === "function") repaint();
-        resolve();
       });
-      peer.on("connection", wireHostConnection);
-      peer.on("error", function (err) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(failTimer);
-        if (err && err.type === "unavailable-id" && allowClientFallback) {
-          tryJoinAsClient(code).then(resolve).catch(reject);
-          return;
-        }
-        syncError = (err && (err.type || err.message)) || String(err);
-        syncStatus = "blad";
-        if (typeof repaint === "function") repaint();
-        reject(err);
-      });
-    });
-  }
-
-  function askHostToYield(code) {
-    return tryJoinAsClient(code).then(function () {
-      return new Promise(function (resolve) {
-        if (!hostConn || !hostConn.open) {
-          destroyPeer();
-          resolve();
-          return;
-        }
-        let done = false;
-        const finish = function () {
-          if (done) return;
-          done = true;
-          clearTimeout(timer);
-          destroyPeer();
-          resolve();
-        };
-        const timer = setTimeout(finish, 3500);
-        setTimeout(function () {
-          if (!hostConn || !hostConn.open) {
-            finish();
-            return;
-          }
-          try { hostConn.send({ type: "admin-takeover" }); } catch (e) { finish(); }
-        }, 600);
-        hostConn.on("close", finish);
-      });
-    });
-  }
-
-  function claimHostAsAdmin(code) {
-    return tryBecomeHost(code, { strict: true }).catch(function () {
-      return askHostToYield(code).then(function () {
-        return tryBecomeHost(code, { strict: true });
-      });
-    }).then(function () {
-      if (game) broadcastState();
-    });
-  }
-
-  function enterRoom(code) {
-    const r = route();
-    if (r.view === "admin") return claimHostAsAdmin(code);
-    return tryJoinAsClient(code).catch(function () {
-      return Promise.reject(new Error("Brak hosta. Admin musi miec otwarty panel i kliknac Nowa gra."));
-    });
   }
 
   function ensureRoomConnection() {
     const r = route();
-    if (r.view === "home" || !roomCode || joining) return;
-    if (r.view === "admin") {
-      if (isHosting()) return;
-      joining = true;
-      claimHostAsAdmin(roomCode)
-        .catch(function (err) {
-          syncError = err.message || String(err);
-          scheduleReconnect();
-        })
-        .finally(function () {
-          joining = false;
-          if (typeof repaint === "function") repaint();
-        });
+    if (r.view === "home" || !roomCode) {
+      stopSync();
       return;
     }
-    if (roomConnected()) return;
+    if (typeof BingoCloud === "undefined") {
+      syncError = "Brak sync.js";
+      return;
+    }
+    if (watchingCode === roomCode && watchStop && syncStatus !== "blad") return;
+    if (joining) return;
     joining = true;
-    enterRoom(roomCode)
-      .catch(function (err) {
-        syncError = err.message || String(err);
-        scheduleReconnect();
-      })
-      .finally(function () {
-        joining = false;
-        if (typeof repaint === "function") repaint();
-      });
+    if (watchStop) watchStop();
+    watchingCode = roomCode;
+    syncStatus = "laczenie";
+    syncError = "";
+    watchStop = BingoCloud.watch(roomCode, KIND, function (state) {
+      joining = false;
+      if (!state) {
+        if (role === "admin" && game && game.code === roomCode) {
+          syncStatus = "polaczono";
+          if (!emptyPublish) {
+            emptyPublish = true;
+            publishState();
+          }
+        } else {
+          syncStatus = "brak gry";
+        }
+      } else {
+        emptyPublish = false;
+        acceptIncomingGame(state);
+        syncStatus = "polaczono";
+        syncError = "";
+        maybeJoinPlayer();
+      }
+      if (typeof repaint === "function") repaint();
+    }, function (err) {
+      joining = false;
+      syncError = err;
+      syncStatus = "blad";
+      if (typeof repaint === "function") repaint();
+      scheduleReconnect();
+    });
   }
 
   function resumeIfNeeded() {
@@ -631,16 +422,9 @@
   }
 
   function sendCall(text, on) {
-    if (isHosting()) {
-      if (!applyCall(text, on)) return false;
-      broadcastState();
-      return true;
-    }
-    if (hostConn && hostConn.open) {
-      hostConn.send({ type: "call", text: text, on: on });
-      return true;
-    }
-    return applyCall(text, on);
+    if (!applyCall(text, on)) return false;
+    publishState();
+    return true;
   }
 
   function route() {
@@ -705,13 +489,12 @@
     }
     let label = "Brak pokoju";
     if (roomCode) {
-      if (syncStatus.indexOf("host") === 0) {
-        label = "Host pokoju " + roomCode + " · " + syncStatus + " — laptop admina musi zostac wlaczony";
-      } else if (syncStatus === "polaczono") label = "Polaczono z " + roomCode;
+      if (syncStatus === "polaczono") label = "Polaczono z pokojem " + roomCode + " (jak Conquest — bez laptopa-hosta)";
       else if (syncStatus === "laczenie") label = "Laczenie z " + roomCode + "…";
+      else if (syncStatus === "brak gry") label = "Pokoj " + roomCode + " — czekam az admin kliknie Nowa gra";
       else label = "Pokoj " + roomCode + " · " + syncStatus;
     }
-    const ok = syncStatus === "polaczono" || syncStatus.indexOf("host") === 0;
+    const ok = syncStatus === "polaczono";
     return el("p", { class: ok ? "status-ok" : "status-muted" }, [label]);
   }
 
@@ -790,13 +573,18 @@
           go("#/play/" + c);
         },
       }, ["Dolacz i wylosuj plansze"]),
+      el("div", { class: "role-grid" }, [
+        el("button", {
+          class: "role p2",
+          type: "button",
+          onClick: function () { go("#/admin"); },
+        }, ["ADMINISTRATOR"]),
+      ]),
       el("p", { class: "hint" }, [
         "Plansza losuje sie raz — potem jej nie zmienisz. Pola zaznacza tylko prowadzacy.",
       ]),
       el("p", { class: "hint" }, [
         el("a", { href: "index.html" }, ["Bingo 2 graczy (wspolna plansza)"]),
-        " · ",
-        el("a", { href: "#/admin" }, ["Panel admina"]),
       ])
     );
     app.replaceChildren(el("section", { class: "screen home" }, kids));
@@ -850,7 +638,7 @@
       codeBox.replaceChildren(
         el("div", { class: "code-big" }, [roomCode || "----"]),
         el("p", { class: "hint" }, [
-          "Gracze: klasyczne.html → pseudonim + ten kod. Admin musi zostac online.",
+          "Gracze otwieraja ten sam link na GitHubie, wpisuja kod. Admin nie musi zostawac online.",
         ])
       );
       refreshGoalsMeta();
@@ -927,19 +715,20 @@
         showErr(err.message || String(err));
         return;
       }
-      destroyPeer();
+      stopSync();
       setRoom(code);
       setRole("admin");
       saveGameCache();
       history.replaceState(null, "", "#/admin/" + code);
       paint();
-      tryBecomeHost(code)
+      publishState()
         .then(function () {
-          broadcastState();
+          syncStatus = "polaczono";
+          ensureRoomConnection();
           paint();
         })
         .catch(function (err) {
-          showErr(err.type || err.message || String(err));
+          showErr(err.message || String(err));
           paint();
         })
         .finally(function () {
@@ -955,7 +744,7 @@
       if (!confirm("Wyczyscic zaznaczenia? Plansze graczy zostaja.")) return;
       clearCalled();
       paint();
-      if (isHosting()) broadcastState();
+      publishState();
     }
 
     function restoreDefaultGoals() {
@@ -990,7 +779,7 @@
         ]),
         el("h1", { class: "admin-title" }, ["BINGO"]),
         el("p", { class: "lead" }, [
-          "Startuj gre, rozdaj kod. Klikaj cele — zaznaczenia ida na plansze wszystkich graczy.",
+          "Startuj gre, rozdaj kod. Telefony otwieraja GitHub — jak Conquest. Laptop mozesz zamknac.",
         ]),
         status,
         codeBox,
@@ -1021,7 +810,7 @@
     const status = el("div");
     const bingoEl = el("div");
     const empty = el("p", { class: "status-muted" }, [
-      "Czekam na plansze… Admin musi miec otwarty panel (Nowa gra) i ten sam kod.",
+      "Czekam na plansze… Admin klika Nowa gra na GitHubie i podaje kod.",
     ]);
     const boardHost = el("div");
     const lockedNote = el("p", { class: "hint" }, [
@@ -1037,7 +826,7 @@
         empty.classList.remove("hidden");
         lockedNote.classList.add("hidden");
         title.textContent = nickDraft || "Gracz";
-        if (roomConnected()) sendJoinIfPlayer();
+        if (roomConnected()) maybeJoinPlayer();
         return;
       }
       empty.classList.add("hidden");
@@ -1076,7 +865,7 @@
     if (roomCode && !roomConnected()) {
       ensureRoomConnection();
     } else {
-      sendJoinIfPlayer();
+      maybeJoinPlayer();
     }
 
     return paint;
@@ -1094,7 +883,7 @@
     if (r.view === "admin") repaint = renderAdmin();
     else if (r.view === "player") repaint = renderPlayer();
     else {
-      destroyPeer();
+      stopSync();
       repaint = null;
       renderHome();
     }
