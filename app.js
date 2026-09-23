@@ -351,8 +351,9 @@
     if (p.done[idx]) {
       delete p.done[idx];
     } else {
+      // Pole zajete przez przeciwnika — nie wolno przejac.
+      if (other && other.done[idx]) return false;
       p.done[idx] = true;
-      if (other) delete other.done[idx];
     }
     enforceOneOwnerPerCell();
     game.updatedAt = Date.now();
@@ -1028,8 +1029,9 @@
 
     function toggle(idx) {
       if (!game) return;
-      const mine = !!(game.players[id] && game.players[id].done[idx]);
-      if (mine && !confirm("Odznaczyc to pole?")) return;
+      const owner = cellOwner(idx);
+      if (owner && owner !== id) return;
+      if (owner === id && !confirm("Odznaczyc to pole?")) return;
       if (!sendToggle(id, idx)) {
         syncError = "Brak polaczenia z hostem";
       }
@@ -1057,7 +1059,8 @@
         const cls =
           "cell" +
           (owner === 1 ? " done-p1" : owner === 2 ? " done-p2" : "") +
-          (winSet[idx] ? " line-win" : "");
+          (winSet[idx] ? " line-win" : "") +
+          (owner && owner !== id ? " locked" : "");
         boardEl.appendChild(
           el(
             "button",
