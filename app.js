@@ -756,7 +756,7 @@
       if (busy) return;
       showErr("");
       busy = true;
-      const code = randomCode();
+      const code = roomCode && roomCode.length === 4 ? roomCode : randomCode();
       try {
         applyGoalsFromEditor();
         game = newGame(
@@ -777,9 +777,11 @@
       saveGameCache();
       history.replaceState(null, "", "#/admin/" + code);
       paint();
-      tryBecomeHost(code)
+      const hostPromise = isHosting()
+        ? Promise.resolve().then(function () { broadcastState(); })
+        : tryBecomeHost(code).then(function () { broadcastState(); });
+      hostPromise
         .then(function () {
-          broadcastState();
           paint();
         })
         .catch(function (err) {
@@ -793,13 +795,20 @@
 
     function resetGame() {
       if (!game && !roomCode) return;
-      if (!confirm("Zresetowac gre u wszystkich?")) return;
+      if (!confirm("Zresetowac gre u wszystkich? Kod pokoju zostanie ten sam.")) return;
+      const kept = roomCode;
       game = null;
+      saveGameCache();
       broadcastState();
-      destroyPeer();
-      clearSession();
-      history.replaceState(null, "", "#/admin");
+      setRole(9);
+      if (kept) {
+        setRoom(kept);
+        history.replaceState(null, "", "#/admin/" + kept);
+      } else {
+        history.replaceState(null, "", "#/admin");
+      }
       paint();
+      if (kept && !roomConnected()) ensureRoomConnection();
     }
 
     function restoreDefaultGoals() {
