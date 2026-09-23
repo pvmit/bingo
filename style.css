@@ -82,20 +82,23 @@ h1 {
 .hidden { display: none !important; }
 
 .cell.done-p1 {
-  background: var(--p1);
-  border-color: var(--p1);
+  background: var(--p1) !important;
+  border-color: var(--p1) !important;
   color: #fff;
+  background-image: none !important;
 }
 
 .cell.done-p2 {
-  background: var(--p2);
-  border-color: var(--p2);
+  background: var(--p2) !important;
+  border-color: var(--p2) !important;
   color: #fff;
+  background-image: none !important;
 }
 
 .cell.done-p1.done-p2 {
-  background: var(--p1);
-  border-color: var(--p1);
+  background: var(--p1) !important;
+  border-color: var(--p1) !important;
+  background-image: none !important;
 }
 
 .cell.locked {

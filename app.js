@@ -206,6 +206,7 @@
       seed: seed,
       code: String(code || "").toUpperCase(),
       board: pickBoard(seed),
+      owners: {},
       players: {
         1: { nick: nicks[1] || LABELS[1], done: {} },
         2: { nick: nicks[2] || LABELS[2], done: {} },
@@ -213,6 +214,46 @@
       winnerId: null,
       updatedAt: Date.now(),
     };
+  }
+
+  /** Single owner per cell: game.owners[idx] = 1|2. Keep players.*.done in sync for line counts. */
+  function syncDoneFromOwners() {
+    if (!game || !game.players) return;
+    if (!game.owners) game.owners = {};
+    if (game.players[1]) game.players[1].done = {};
+    if (game.players[2]) game.players[2].done = {};
+    Object.keys(game.owners).forEach(function (key) {
+      const owner = Number(game.owners[key]);
+      if (owner !== 1 && owner !== 2) {
+        delete game.owners[key];
+        return;
+      }
+      if (game.players[owner]) game.players[owner].done[key] = true;
+    });
+  }
+
+  function migrateOwnersFromDone() {
+    if (!game || !game.players) return;
+    if (game.owners && typeof game.owners === "object") {
+      syncDoneFromOwners();
+      return;
+    }
+    game.owners = {};
+    for (let i = 0; i < CELL_COUNT; i++) {
+      const k = String(i);
+      const d1 = !!(game.players[1] && game.players[1].done && (game.players[1].done[i] || game.players[1].done[k]));
+      const d2 = !!(game.players[2] && game.players[2].done && (game.players[2].done[i] || game.players[2].done[k]));
+      if (d1) game.owners[k] = 1;
+      else if (d2) game.owners[k] = 2;
+    }
+    syncDoneFromOwners();
+  }
+
+  function cellOwner(idx) {
+    if (!game) return 0;
+    migrateOwnersFromDone();
+    const owner = Number(game.owners[String(idx)] || 0);
+    return owner === 1 || owner === 2 ? owner : 0;
   }
 
   function setRoom(code) {
@@ -295,7 +336,7 @@
     if (lastResetAt && (incoming.updatedAt || 0) < lastResetAt) return false;
     if (!game || (incoming.updatedAt || 0) >= (game.updatedAt || 0)) {
       game = incoming;
-      enforceOneOwnerPerCell();
+      migrateOwnersFromDone();
       saveGameCache();
       return true;
     }
@@ -305,6 +346,7 @@
   /** Clear marks on current board; keep room, board, nicks, peer. */
   function clearGameMarks() {
     if (!game || !game.players) return false;
+    game.owners = {};
     if (game.players[1]) game.players[1].done = {};
     if (game.players[2]) game.players[2].done = {};
     game.winnerId = null;
@@ -344,39 +386,22 @@
 
   function applyToggle(playerId, idx) {
     if (!game) return false;
-    const p = game.players[playerId];
-    if (!p) return false;
-    const otherId = playerId === 1 ? 2 : 1;
-    const other = game.players[otherId];
-    if (p.done[idx]) {
-      delete p.done[idx];
+    if (playerId !== 1 && playerId !== 2) return false;
+    migrateOwnersFromDone();
+    const key = String(idx);
+    const owner = Number(game.owners[key] || 0);
+    if (owner === playerId) {
+      delete game.owners[key];
+    } else if (!owner) {
+      game.owners[key] = playerId;
     } else {
-      // Pole zajete przez przeciwnika — nie wolno przejac.
-      if (other && other.done[idx]) return false;
-      p.done[idx] = true;
+      // Zajete przez przeciwnika — bez zmian.
+      return false;
     }
-    enforceOneOwnerPerCell();
+    syncDoneFromOwners();
     game.updatedAt = Date.now();
     saveGameCache();
     return true;
-  }
-
-  /** Never allow both players to own the same cell (legacy / race). */
-  function enforceOneOwnerPerCell() {
-    if (!game || !game.players) return;
-    const p1 = game.players[1];
-    const p2 = game.players[2];
-    if (!p1 || !p2) return;
-    for (let i = 0; i < CELL_COUNT; i++) {
-      if (p1.done[i] && p2.done[i]) delete p2.done[i];
-    }
-  }
-
-  function cellOwner(idx) {
-    if (!game || !game.players) return 0;
-    if (game.players[1] && game.players[1].done[idx]) return 1;
-    if (game.players[2] && game.players[2].done[idx]) return 2;
-    return 0;
   }
 
   function updateHostStatus() {
@@ -406,10 +431,10 @@
     conn.on("data", function (msg) {
       if (!msg) return;
       if (msg.type === "toggle") {
-        if (applyToggle(msg.playerId, msg.idx)) {
-          broadcastState();
-          if (typeof repaint === "function") repaint();
-        }
+        applyToggle(msg.playerId, msg.idx);
+        // Zawsze odeslij stan — takze po odrzuceniu (np. pole zajete).
+        broadcastState();
+        if (typeof repaint === "function") repaint();
         return;
       }
       if (msg.type === "admin-takeover") {
@@ -427,12 +452,7 @@
         }
         return;
       }
-      if (msg.type === "state") {
-        if (acceptIncomingGame(msg.game)) {
-          broadcastState();
-          if (typeof repaint === "function") repaint();
-        }
-      }
+      // Ignoruj state od klientow — host jest zrodlem prawdy.
     });
     conn.on("close", function () {
       const i = clients.indexOf(conn);
@@ -471,13 +491,19 @@
           clearTimeout(failTimer);
           syncStatus = "polaczono";
           syncError = "";
-          if (game) hostConn.send({ type: "state", game: game });
           if (typeof repaint === "function") repaint();
           resolve();
         });
         hostConn.on("data", function (msg) {
-          if (!msg || msg.type !== "state") return;
-          if (acceptIncomingGame(msg.game) && typeof repaint === "function") repaint();
+          if (!msg) return;
+          if (msg.type === "state") {
+            if (acceptIncomingGame(msg.game) && typeof repaint === "function") repaint();
+            return;
+          }
+          if (msg.type === "reset") {
+            if (msg.at) noteResetAt(msg.at);
+            if (acceptIncomingGame(msg.game) && typeof repaint === "function") repaint();
+          }
         });
         hostConn.on("close", function () {
           syncStatus = "rozlaczono";
