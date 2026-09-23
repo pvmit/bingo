@@ -310,6 +310,7 @@
   }
 
   function broadcastState() {
+    if (!game) return;
     const payload = { type: "state", game: game };
     clients.forEach(function (c) {
       if (c.open) c.send(payload);
@@ -327,12 +328,9 @@
   }
 
   function acceptIncomingGame(incoming) {
-    if (incoming == null) {
-      if (game == null) return false;
-      game = null;
-      saveGameCache();
-      return true;
-    }
+    // Nigdy nie kasuj lokalnej planszy pustym state (admin bez cache).
+    if (incoming == null) return false;
+    if (!incoming.board || !incoming.players) return false;
     if (lastResetAt && (incoming.updatedAt || 0) < lastResetAt) return false;
     if (!game || (incoming.updatedAt || 0) >= (game.updatedAt || 0)) {
       game = incoming;
@@ -425,34 +423,44 @@
   function wireHostConnection(conn) {
     clients.push(conn);
     conn.on("open", function () {
-      conn.send({ type: "state", game: game });
+      if (game) conn.send({ type: "state", game: game });
       updateHostStatus();
     });
     conn.on("data", function (msg) {
       if (!msg) return;
       if (msg.type === "toggle") {
         applyToggle(msg.playerId, msg.idx);
-        // Zawsze odeslij stan — takze po odrzuceniu (np. pole zajete).
         broadcastState();
         if (typeof repaint === "function") repaint();
         return;
       }
       if (msg.type === "admin-takeover") {
-        destroyPeer();
-        syncStatus = "rozlaczono";
-        if (typeof repaint === "function") repaint();
-        scheduleReconnect();
+        if (game) {
+          try { conn.send({ type: "state", game: game }); } catch (e) { /* ignore */ }
+        }
+        setTimeout(function () {
+          destroyPeer();
+          syncStatus = "rozlaczono";
+          if (typeof repaint === "function") repaint();
+          scheduleReconnect();
+        }, 200);
         return;
       }
       if (msg.type === "reset") {
         if (msg.at) noteResetAt(msg.at);
-        if (acceptIncomingGame(msg.game)) {
+        if (msg.game && acceptIncomingGame(msg.game)) {
           broadcastState();
           if (typeof repaint === "function") repaint();
         }
         return;
       }
-      // Ignoruj state od klientow — host jest zrodlem prawdy.
+      // Przyjmij plansze od klienta tylko gdy host jej nie ma (np. po przejeciu hosta).
+      if (msg.type === "state" && msg.game && !game) {
+        if (acceptIncomingGame(msg.game)) {
+          broadcastState();
+          if (typeof repaint === "function") repaint();
+        }
+      }
     });
     conn.on("close", function () {
       const i = clients.indexOf(conn);
@@ -491,6 +499,7 @@
           clearTimeout(failTimer);
           syncStatus = "polaczono";
           syncError = "";
+          if (game) hostConn.send({ type: "state", game: game });
           if (typeof repaint === "function") repaint();
           resolve();
         });
@@ -502,7 +511,7 @@
           }
           if (msg.type === "reset") {
             if (msg.at) noteResetAt(msg.at);
-            if (acceptIncomingGame(msg.game) && typeof repaint === "function") repaint();
+            if (msg.game && acceptIncomingGame(msg.game) && typeof repaint === "function") repaint();
           }
         });
         hostConn.on("close", function () {
@@ -595,8 +604,15 @@
           destroyPeer();
           resolve();
         };
-        const timer = setTimeout(finish, 2500);
-        hostConn.send({ type: "admin-takeover" });
+        // Daj czas na odebranie planszy od obecnego hosta, potem przejmij.
+        const timer = setTimeout(finish, 3500);
+        setTimeout(function () {
+          if (!hostConn || !hostConn.open) {
+            finish();
+            return;
+          }
+          try { hostConn.send({ type: "admin-takeover" }); } catch (e) { finish(); }
+        }, 600);
         hostConn.on("close", finish);
       });
     });
@@ -608,6 +624,8 @@
       return askHostToYield(code).then(function () {
         return tryBecomeHost(code, { strict: true });
       });
+    }).then(function () {
+      if (game) broadcastState();
     });
   }
 
@@ -627,9 +645,6 @@
       if (isHosting()) return;
       joining = true;
       claimHostAsAdmin(roomCode)
-        .then(function () {
-          broadcastState();
-        })
         .catch(function (err) {
           syncError = err.message || String(err);
           scheduleReconnect();
@@ -644,7 +659,8 @@
     joining = true;
     enterRoom(roomCode)
       .catch(function (err) {
-        syncError = err.message || String(err);
+        if (err && err.message === "no-host") syncError = "";
+        else syncError = err.message || String(err);
         scheduleReconnect();
       })
       .finally(function () {
@@ -1049,7 +1065,7 @@
     const status = el("div");
     const scoreboard = el("div", { class: "admin-summary player-score" });
     const empty = el("p", { class: "status-muted" }, [
-      "Brak gry albo laczenie… Wejdz po starcie u admina (wystarczy raz pobrac plansze).",
+      "Laczenie z pokojem… Jesli plansza nie wraca: sprawdz kod i czy admin kliknal Nowa gra.",
     ]);
     const boardEl = el("div", { class: "board" });
     boardEl.style.gridTemplateColumns = "repeat(" + SIZE + ", minmax(0, 1fr))";
