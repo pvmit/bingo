@@ -345,8 +345,14 @@
     if (!game) return false;
     const p = game.players[playerId];
     if (!p) return false;
-    if (p.done[idx]) delete p.done[idx];
-    else p.done[idx] = true;
+    const otherId = playerId === 1 ? 2 : 1;
+    const other = game.players[otherId];
+    if (p.done[idx]) {
+      delete p.done[idx];
+    } else {
+      p.done[idx] = true;
+      if (other && other.done[idx]) delete other.done[idx];
+    }
     game.updatedAt = Date.now();
     saveGameCache();
     return true;
@@ -383,6 +389,13 @@
           broadcastState();
           if (typeof repaint === "function") repaint();
         }
+        return;
+      }
+      if (msg.type === "admin-takeover") {
+        destroyPeer();
+        syncStatus = "rozlaczono";
+        if (typeof repaint === "function") repaint();
+        scheduleReconnect();
         return;
       }
       if (msg.type === "reset") {
@@ -472,7 +485,8 @@
     });
   }
 
-  function tryBecomeHost(code) {
+  function tryBecomeHost(code, opts) {
+    const allowClientFallback = !(opts && opts.strict);
     return new Promise(function (resolve, reject) {
       destroyPeer();
       setRoom(code);
@@ -506,7 +520,7 @@
         if (settled) return;
         settled = true;
         clearTimeout(failTimer);
-        if (err && err.type === "unavailable-id") {
+        if (err && err.type === "unavailable-id" && allowClientFallback) {
           tryJoinAsClient(code).then(resolve).catch(reject);
           return;
         }
@@ -518,8 +532,42 @@
     });
   }
 
-  /** Anyone online can host — admin can close after players joined. */
+  function askHostToYield(code) {
+    return tryJoinAsClient(code).then(function () {
+      return new Promise(function (resolve) {
+        if (!hostConn || !hostConn.open) {
+          destroyPeer();
+          resolve();
+          return;
+        }
+        let done = false;
+        const finish = function () {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          destroyPeer();
+          resolve();
+        };
+        const timer = setTimeout(finish, 2500);
+        hostConn.send({ type: "admin-takeover" });
+        hostConn.on("close", finish);
+      });
+    });
+  }
+
+  /** Admin always prefers to be the room host when online. */
+  function claimHostAsAdmin(code) {
+    return tryBecomeHost(code, { strict: true }).catch(function () {
+      return askHostToYield(code).then(function () {
+        return tryBecomeHost(code, { strict: true });
+      });
+    });
+  }
+
+  /** Players: join existing host, or become host if none. Admin: always claim host. */
   function enterRoom(code) {
+    const r = route();
+    if (r.view === "admin") return claimHostAsAdmin(code);
     return tryJoinAsClient(code).catch(function () {
       return tryBecomeHost(code);
     });
@@ -528,6 +576,23 @@
   function ensureRoomConnection() {
     const r = route();
     if (r.view === "home" || !roomCode || joining) return;
+    if (r.view === "admin") {
+      if (isHosting()) return;
+      joining = true;
+      claimHostAsAdmin(roomCode)
+        .then(function () {
+          broadcastState();
+        })
+        .catch(function (err) {
+          syncError = err.message || String(err);
+          scheduleReconnect();
+        })
+        .finally(function () {
+          joining = false;
+          if (typeof repaint === "function") repaint();
+        });
+      return;
+    }
     if (roomConnected()) return;
     joining = true;
     enterRoom(roomCode)
@@ -548,15 +613,17 @@
   }
 
   function sendToggle(playerId, idx) {
+    if (isHosting()) {
+      if (!applyToggle(playerId, idx)) return false;
+      broadcastState();
+      return true;
+    }
     if (hostConn && hostConn.open) {
       hostConn.send({ type: "toggle", playerId: playerId, idx: idx });
       return true;
     }
-    if (isHosting() && applyToggle(playerId, idx)) {
-      broadcastState();
-      return true;
-    }
-    return false;
+    // Solo / chwilowo bez hosta — zaznacz lokalnie, zeby UI nie stalo.
+    return applyToggle(playerId, idx);
   }
 
   function route() {
@@ -792,7 +859,7 @@
         const d2 = !!game.players[2].done[idx];
         const cell = el("div", { class: "cell readonly" }, [text]);
         if (d1) cell.classList.add("done-p1");
-        if (d2) cell.classList.add("done-p2");
+        else if (d2) cell.classList.add("done-p2");
         if (win1[idx] || win2[idx]) cell.classList.add("line-win");
         board.appendChild(cell);
       });
@@ -903,7 +970,7 @@
         ]),
         el("h1", { class: "admin-title" }, ["BINGO"]),
         el("p", { class: "lead" }, [
-          "Ustaw pytania, startuj gre i rozdaj kod. Potem mozesz zamknac laptopa. Bingo nie konczy gry.",
+          "Ustaw pytania, startuj gre i rozdaj kod. Gdy admin jest online, zawsze jest hostem pokoju.",
         ]),
         status,
         codeBox,
@@ -942,10 +1009,12 @@
 
     function toggle(idx) {
       if (!game) return;
+      const mine = !!(game.players[id] && game.players[id].done[idx]);
+      if (mine && !confirm("Odznaczyc to pole?")) return;
       if (!sendToggle(id, idx)) {
         syncError = "Brak polaczenia z hostem";
-        paint();
       }
+      paint();
     }
 
     function paint() {
@@ -969,8 +1038,7 @@
         const d2 = !!game.players[2].done[idx];
         const cls =
           "cell" +
-          (d1 ? " done-p1" : "") +
-          (d2 ? " done-p2" : "") +
+          (d1 ? " done-p1" : d2 ? " done-p2" : "") +
           (winSet[idx] ? " line-win" : "");
         boardEl.appendChild(
           el(
