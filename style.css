@@ -300,6 +300,24 @@ button:disabled {
 .sum-card.p1 { border-color: color-mix(in srgb, var(--p1) 50%, var(--line)); }
 .sum-card.p2 { border-color: color-mix(in srgb, var(--p2) 50%, var(--line)); }
 
+.sum-card.me {
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.sum-card .score-lines {
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+
+.player-score {
+  margin-top: 4px;
+}
+
+.player-score .sum-card {
+  flex: 1;
+  min-width: 0;
+}
+
 .muted { color: var(--muted); font-size: 0.9rem; }
 
 .winner {

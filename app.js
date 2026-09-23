@@ -1047,6 +1047,7 @@
     const title = el("strong", null, [LABELS[id]]);
     const linesEl = el("span", { class: "muted" }, [""]);
     const status = el("div");
+    const scoreboard = el("div", { class: "admin-summary player-score" });
     const empty = el("p", { class: "status-muted" }, [
       "Brak gry albo laczenie… Wejdz po starcie u admina (wystarczy raz pobrac plansze).",
     ]);
@@ -1064,8 +1065,27 @@
       paint();
     }
 
+    function paintScore() {
+      scoreboard.replaceChildren();
+      if (!game) {
+        scoreboard.classList.add("hidden");
+        return;
+      }
+      scoreboard.classList.remove("hidden");
+      [1, 2].forEach(function (pid) {
+        const p = game.players[pid];
+        const card = el("div", { class: "sum-card p" + pid + (pid === id ? " me" : "") }, [
+          el("strong", null, [(p && p.nick) || LABELS[pid]]),
+          el("span", { class: "score-lines" }, [countLines(p.done) + " lin."]),
+          el("span", { class: "muted" }, [doneCount(p.done) + "/" + CELL_COUNT + " pol"]),
+        ]);
+        scoreboard.appendChild(card);
+      });
+    }
+
     function paint() {
       status.replaceChildren(syncBadge());
+      paintScore();
       boardEl.replaceChildren();
       if (!game) {
         empty.classList.remove("hidden");
@@ -1116,12 +1136,19 @@
           }, ["P" + id]),
         ]),
         status,
+        scoreboard,
         empty,
         boardEl,
       ])
     );
     paint();
 
+    if (roomCode && !roomConnected()) {
+      ensureRoomConnection();
+    }
+
+    return paint;
+  }
     if (roomCode && !roomConnected()) {
       ensureRoomConnection();
     }
