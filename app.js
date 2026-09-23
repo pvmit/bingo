@@ -189,7 +189,13 @@
   }
 
   function newGame(nicks, code) {
-    const seed = "bingo-board-" + String(code || "").toUpperCase();
+    const seed =
+      "bingo-board-" +
+      String(code || "").toUpperCase() +
+      "-" +
+      Date.now() +
+      "-" +
+      Math.random().toString(36).slice(2, 8);
     return {
       seed: seed,
       code: String(code || "").toUpperCase(),
@@ -296,6 +302,19 @@
     if (game.players[2]) game.players[2].done = {};
     game.winnerId = null;
     game.updatedAt = Date.now();
+    noteResetAt(game.updatedAt);
+    saveGameCache();
+    return true;
+  }
+
+  /** New random board in the same room; keep nicks and peer. */
+  function reshuffleSameRoom(nicks) {
+    if (!roomCode) return false;
+    const nickMap = {
+      1: (nicks && nicks[1]) || (game && game.players[1] && game.players[1].nick) || LABELS[1],
+      2: (nicks && nicks[2]) || (game && game.players[2] && game.players[2].nick) || LABELS[2],
+    };
+    game = newGame(nickMap, roomCode);
     noteResetAt(game.updatedAt);
     saveGameCache();
     return true;
@@ -715,7 +734,7 @@
     function refreshGoalsMeta() {
       const n = parseGoalsText(goalsArea.value).length;
       goalsMeta.textContent =
-        n + " pytan w puli (min. " + CELL_COUNT + " przed startem). Edycja tylko przed Nowa gra.";
+        n + " pytan w puli (min. " + CELL_COUNT + "). Nowa gra = nowy pokoj; Reset = nowa plansza w tym samym.";
     }
 
     function applyGoalsFromEditor() {
@@ -736,15 +755,15 @@
           "#/p1/" + (roomCode || "KOD"),
         ])
       );
-      const editing = !game;
-      goalsArea.disabled = !editing;
-      goalsBlock.classList.toggle("locked", !editing);
+      const editing = true;
+      goalsArea.disabled = false;
+      goalsBlock.classList.remove("locked");
       refreshGoalsMeta();
       summary.replaceChildren();
       boardWrap.replaceChildren();
       if (!game) {
         summary.appendChild(
-          el("p", { class: "status-muted" }, ["Brak aktywnej gry — mozesz edytowac pytania."])
+          el("p", { class: "status-muted" }, ["Brak aktywnej gry — ustaw pytania i kliknij Nowa gra."])
         );
         return;
       }
@@ -778,7 +797,7 @@
       if (busy) return;
       showErr("");
       busy = true;
-      const code = roomCode && roomCode.length === 4 ? roomCode : randomCode();
+      const code = randomCode();
       try {
         applyGoalsFromEditor();
         game = newGame(
@@ -789,21 +808,21 @@
           code
         );
         game.winnerId = null;
+        noteResetAt(game.updatedAt);
       } catch (err) {
         busy = false;
         showErr(err.message || String(err));
         return;
       }
+      destroyPeer();
       setRoom(code);
       setRole(9);
       saveGameCache();
       history.replaceState(null, "", "#/admin/" + code);
       paint();
-      const hostPromise = isHosting()
-        ? Promise.resolve().then(function () { broadcastState(); })
-        : tryBecomeHost(code).then(function () { broadcastState(); });
-      hostPromise
+      tryBecomeHost(code)
         .then(function () {
+          broadcastState();
           paint();
         })
         .catch(function (err) {
@@ -816,13 +835,25 @@
     }
 
     function resetGame() {
-      if (!game) {
-        showErr("Brak aktywnej gry do zresetowania.");
+      if (!roomCode) {
+        showErr("Brak pokoju — najpierw Nowa gra.");
         return;
       }
-      if (!confirm("Wyczyscic zaznaczenia u wszystkich? Kod pokoju i plansza zostaja.")) return;
+      if (!confirm("Wylosowac nowa plansze w tym samym pokoju (" + roomCode + ")?")) return;
       showErr("");
-      if (!clearGameMarks()) return;
+      try {
+        applyGoalsFromEditor();
+        if (!reshuffleSameRoom({
+          1: nick1.value.trim() || LABELS[1],
+          2: nick2.value.trim() || LABELS[2],
+        })) {
+          showErr("Nie udalo sie wylosowac planszy.");
+          return;
+        }
+      } catch (err) {
+        showErr(err.message || String(err));
+        return;
+      }
       paint();
       publishGameState()
         .then(function () {
@@ -835,10 +866,6 @@
     }
 
     function restoreDefaultGoals() {
-      if (game) {
-        alert("Najpierw zresetuj gre, zeby edytowac pytania.");
-        return;
-      }
       goalsArea.value = goalsToText(defaultGoals());
       saveCustomGoals(null);
       refreshGoalsMeta();
